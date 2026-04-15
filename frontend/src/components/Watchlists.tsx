@@ -382,7 +382,7 @@ export function Watchlists() {
                     </span>
                   )}
                   {!item.notify_webhook && (
-                    <BellOff size={9} className="text-[var(--text-ghost)]" title="Webhook notifications disabled" />
+                    <BellOff size={9} className="text-[var(--text-ghost)]" />
                   )}
                 </div>
                 {item.description && (
