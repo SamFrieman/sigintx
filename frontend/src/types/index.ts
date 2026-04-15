@@ -1,5 +1,37 @@
 export type NewsCategory = 'security' | 'tech' | 'crypto' | 'politics' | 'ai'
 
+export type SeverityLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'INFO'
+
+export type CVEStatusValue = 'open' | 'investigating' | 'patched' | 'accepted'
+
+export interface CVEItem {
+  id: number
+  cve_id: string
+  description: string | null
+  cvss_score: number | null
+  cvss_vector: string | null
+  severity: SeverityLevel
+  in_kev: boolean
+  epss_score: number | null
+  priority_score: number | null
+  published_at: string | null
+  affected_products: string[]
+  tags: string[]
+  threat_actors: string[]
+}
+
+export interface IOCItem {
+  id: number
+  ioc_type: string
+  value: string
+  malware_family: string | null
+  source: string
+  confidence: number | null
+  first_seen: string | null
+  fetched_at: string
+  tags: string | null
+}
+
 export interface NewsItem {
   id: number
   title: string
@@ -7,7 +39,7 @@ export interface NewsItem {
   source: string
   summary: string | null
   published_at: string | null
-  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'INFO'
+  severity: SeverityLevel
   tags: string[]
   threat_actors: string[]
   cve_refs: string[]
@@ -46,8 +78,6 @@ export interface Stats {
   critical_news: number
   ws_connections: number
 }
-
-export type SeverityLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'INFO'
 
 export interface WSMessage {
   type: 'connected' | 'rss_update' | 'ping' | 'briefing_ready'
@@ -88,6 +118,7 @@ export interface OllamaChunk {
 
 export type AnalyzeTarget =
   | { type: 'news'; item: NewsItem }
+  | { type: 'cve'; item: CVEItem }
 
 // ── AI Analyst ───────────────────────────────────────────────────────────────
 export interface AiBriefing {
@@ -124,6 +155,6 @@ export interface ChatMessage {
   content: string
   streaming?: boolean
   timestamp: Date
-  steps?: AgentStep[]   // populated only in agent mode
+  steps?: AgentStep[]
   agentMode?: boolean
 }
