@@ -30,9 +30,9 @@ A real-time signals intelligence dashboard that aggregates live data from **148 
 | **Backend** | APScheduler | Background data collection (3-min RSS cycle) |
 | **Backend** | httpx + feedparser | Async HTTP + RSS/Atom parsing |
 | **Backend** | BeautifulSoup4 | HTML summary extraction |
-| **AI** | Ollama | Local LLM inference (optional) |
-| **AI** | Groq API | Free-tier cloud fallback (optional) |
-| **AI** | OpenRouter | Pay-per-use multi-model fallback (optional) |
+| **AI** | Ollama | Local LLM inference (auto-managed) |
+| **AI** | Groq API | Free-tier cloud fallback |
+| **AI** | OpenRouter | Pay-per-use multi-model fallback |
 | **Production** | PostgreSQL 16 | Production database |
 | **Production** | Redis 7 | Pub/sub + Celery task broker |
 | **Production** | Celery 5 | Distributed task queue |
@@ -471,7 +471,7 @@ SIGINTX uses a three-layer token architecture (Primitive → Semantic → Compon
 - `FIXED` AI markdown rendering — full rewrite of `MarkdownText` component: tables, bold, italic, inline code, fenced code blocks, blockquotes, horizontal rules all render correctly
 - `FIXED` Health endpoint version string updated to `3.5.0` → now tracks actual app version
 
-### v3.6.0 — 2026-04-12
+### v3.6.0 — 2026-04-14
 - `ADDED` `session_logger.py` — rotating log file + in-memory ring buffer + `GET /api/v1/logs` + SSE stream
 - `ADDED` `RequestLoggingMiddleware` — every HTTP request logged with method, path, status, and latency
 - `ADDED` `start.sh` / `start.bat` — unified launchers that start both services and pipe output to `logs/`
@@ -480,14 +480,14 @@ SIGINTX uses a three-layer token architecture (Primitive → Semantic → Compon
 - `IMPROVED` ThreatMap actor origin nodes — country label, `stopPropagation()` on click
 - `IMPROVED` ThreatMap attack target nodes — city label, outer ring for CRITICAL targets
 
-### v3.5.0 — 2026-04-11
+### v3.5.0 — 2026-04-13
 - `FIXED` Correlation graph HTTP 500 — JSON-mode + three-stage fallback parser
 - `FIXED` Dead RSS feeds — bulk SQL UPDATE correctly disables stale DB entries on startup
 - `FIXED` AI campaign cache keyed by `days_back` — independent caches per time window
 - `IMPROVED` ThreatMap — night earth texture, thicker arcs, larger nodes, stronger glow
 - `IMPROVED` AI Analyst — `loadStatus()` throttled to 60s, eliminating Ollama polling saturation
 
-### v3.4.0 — 2026-04-10
+### v3.4.0 — 2026-04-12
 - `ADDED` `POST /api/v1/campaigns/ai-discover` — LLM hidden campaign discovery
 - `ADDED` AI Discover tab in Campaign Timeline
 - `FIXED` AI status endpoint — 30s server-side TTL
