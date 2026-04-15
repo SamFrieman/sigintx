@@ -126,6 +126,7 @@ export interface AiBriefing {
   generated_at: string
   model_used: string
   news_count: number
+  cve_count: number
   top_severity: SeverityLevel
   threat_actors: string[]
   content?: string
