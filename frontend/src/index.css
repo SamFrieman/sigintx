@@ -1,0 +1,372 @@
+/* ─── Google Fonts ───────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=IBM+Plex+Mono:wght@300;400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── SIGINTX CSS custom properties ────────────────────── */
+:root {
+  /* Primitive */
+  --prim-black-900: #030609;
+  --prim-black-800: #060d18;
+  --prim-black-700: #091422;
+  --prim-black-600: #0d1c30;
+  --prim-black-500: #112540;
+  --prim-cyan-400: #00d4ff;
+  --prim-green-400: #00ff88;
+  --prim-red-400: #ff2255;
+  --prim-amber-400: #ffaa00;
+  --prim-purple-400: #aa44ff;
+  --prim-white-100: #e8f0ff;
+  --prim-white-200: #b0c8e8;
+  --prim-white-300: #6888aa;
+  --prim-white-400: #304860;
+  --prim-white-500: #182838;
+
+  /* Semantic */
+  --bg-base:          var(--prim-black-900);
+  --bg-surface:       var(--prim-black-800);
+  --bg-card:          var(--prim-black-700);
+  --bg-card-hover:    var(--prim-black-600);
+  --bg-elevated:      var(--prim-black-500);
+  --color-primary:    var(--prim-cyan-400);
+  --color-success:    var(--prim-green-400);
+  --color-danger:     var(--prim-red-400);
+  --color-warning:    var(--prim-amber-400);
+  --color-info:       var(--prim-purple-400);
+  --text-base:        var(--prim-white-100);
+  --text-secondary:   var(--prim-white-200);
+  --text-muted:       var(--prim-white-300);
+  --text-dim:         var(--prim-white-400);
+  --text-ghost:       var(--prim-white-500);
+  --border-base:      var(--prim-white-500);
+  --border-accent:    rgba(0, 212, 255, 0.25);
+
+  /* Severity */
+  --sev-critical:  #ff2255;
+  --sev-high:      #ffaa00;
+  --sev-medium:    #00d4ff;
+  --sev-info:      #00ff88;
+}
+
+/* ─── Light theme ───────────────────────────────────────── */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base:       #f0f4f8;
+  --bg-surface:    #ffffff;
+  --bg-card:       #ffffff;
+  --bg-card-hover: #f0f4f8;
+  --bg-elevated:   #e2e8f0;
+
+  --color-primary:  #0077aa;
+  --color-success:  #059669;
+  --color-danger:   #dc2626;
+  --color-warning:  #d97706;
+  --color-info:     #7c3aed;
+
+  --text-base:      #0f172a;
+  --text-secondary: #1e293b;
+  --text-muted:     #475569;
+  --text-dim:       #64748b;
+  --text-ghost:     #94a3b8;
+
+  --border-base:    #cbd5e1;
+  --border-accent:  rgba(0, 119, 170, 0.3);
+
+  --sev-critical:  #dc2626;
+  --sev-high:      #d97706;
+  --sev-medium:    #0077aa;
+  --sev-info:      #059669;
+}
+
+[data-theme="light"] body {
+  background-color: var(--bg-base);
+  background-image:
+    linear-gradient(rgba(0, 119, 170, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 119, 170, 0.04) 1px, transparent 1px);
+}
+
+/* Disable CRT effects in light mode */
+[data-theme="light"] body::before,
+[data-theme="light"] body::after {
+  display: none;
+}
+
+[data-theme="light"] .panel {
+  border-top-color: var(--color-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+[data-theme="light"] .panel-header {
+  background: rgba(0, 119, 170, 0.03);
+}
+
+[data-theme="light"] .tag-chip {
+  background: rgba(0, 119, 170, 0.07);
+  border-color: rgba(0, 119, 170, 0.2);
+}
+
+[data-theme="light"] .actor-chip {
+  background: rgba(124, 58, 237, 0.08);
+  border-color: rgba(124, 58, 237, 0.2);
+}
+
+[data-theme="light"] .cve-chip {
+  background: rgba(0, 119, 170, 0.07);
+  border-color: rgba(0, 119, 170, 0.2);
+}
+
+/* ─── Base reset ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-base);
+  color: var(--text-secondary);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  min-height: 100vh;
+
+  /* Dot grid */
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.04) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+/* CRT scanlines overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0, 212, 255, 0.012) 2px, rgba(0, 212, 255, 0.012) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Vignette */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.65) 100%);
+  pointer-events: none;
+  z-index: 9998;
+}
+
+/* ─── Scrollbar — invisible but functional ───────────────── */
+/* Firefox */
+* { scrollbar-width: none; }
+/* WebKit / Chromium */
+::-webkit-scrollbar { width: 0; height: 0; background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ─── Severity utility classes ───────────────────────────── */
+.sev-bar { width: 3px; border-radius: 2px; align-self: stretch; flex-shrink: 0; }
+.sev-critical { background: var(--sev-critical); box-shadow: 0 0 8px rgba(255, 34, 85, 0.6); }
+.sev-high     { background: var(--sev-high); }
+.sev-medium   { background: var(--sev-medium); }
+.sev-info     { background: var(--sev-info); }
+
+.sev-text-critical { color: var(--sev-critical); }
+.sev-text-high     { color: var(--sev-high); }
+.sev-text-medium   { color: var(--sev-medium); }
+.sev-text-info     { color: var(--sev-info); }
+
+/* ─── Tag chip ───────────────────────────────────────────── */
+.tag-chip {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  background: rgba(0, 212, 255, 0.07);
+  color: var(--text-muted);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  white-space: nowrap;
+}
+
+/* ─── Panel card ─────────────────────────────────────────── */
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-base);
+  border-top: 2px solid var(--color-primary);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-base);
+  background: rgba(0, 212, 255, 0.03);
+}
+
+.panel-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  color: var(--color-primary);
+  text-transform: uppercase;
+}
+
+/* ─── Live dot ───────────────────────────────────────────── */
+.live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.35; transform: scale(0.75); }
+}
+
+/* ─── KEV badge ──────────────────────────────────────────── */
+.kev-badge {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.56rem;
+  letter-spacing: 0.1em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(255, 34, 85, 0.12);
+  color: var(--sev-critical);
+  border: 1px solid rgba(255, 34, 85, 0.35);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* ─── Selection ──────────────────────────────────────────── */
+::selection {
+  background: rgba(0, 212, 255, 0.25);
+  color: var(--text-base);
+}
+
+/* ─── Focus ring ─────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ─── Transition defaults ────────────────────────────────── */
+button, a { transition: all 0.15s ease; }
+
+/* ─── Actor chip ─────────────────────────────────────────── */
+.actor-chip {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.55rem;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  background: rgba(170, 68, 255, 0.1);
+  color: var(--color-info);
+  border: 1px solid rgba(170, 68, 255, 0.25);
+  white-space: nowrap;
+}
+
+/* ─── CVE chip ───────────────────────────────────────────── */
+.cve-chip {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.55rem;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(0, 212, 255, 0.07);
+  color: var(--color-primary);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  white-space: nowrap;
+}
+
+/* ─── Source health indicator ────────────────────────────── */
+.source-fresh   { color: var(--color-success); }
+.source-stale   { color: var(--color-warning); }
+.source-dead    { color: var(--color-danger); }
+
+/* ─── Mobile responsive overrides ───────────────────────── */
+@media (max-width: 640px) {
+  /* Tighten panel headers on mobile */
+  .panel-header {
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Slightly larger tap targets */
+  button {
+    min-height: 32px;
+  }
+
+  /* Reduce dot-grid on mobile (performance) */
+  body {
+    background-size: 30px 30px;
+  }
+
+  /* Disable vignette on mobile (GPU cost) */
+  body::after {
+    display: none;
+  }
+}
+
+/* ─── Mobile nav bottom bar ─────────────────────────────── */
+.mobile-nav {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-base);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-nav::-webkit-scrollbar { display: none; }
+  .mobile-nav { scrollbar-width: none; }
+
+  /* Add bottom padding to main content so it doesn't hide behind nav */
+  .mobile-main-pad {
+    padding-bottom: 56px;
+  }
+
+  /* Hide desktop tab bar on small screens */
+  .desktop-tabs {
+    display: none;
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-nav { display: none; }
+  .desktop-tabs { display: flex; }
+}
+
+/* ─── Scrollbar none utility ─────────────────────────────── */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
