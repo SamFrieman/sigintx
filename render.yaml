@@ -23,7 +23,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: sigintx-redis
           property: connectionString
       - key: ALLOWED_ORIGINS
@@ -39,14 +39,12 @@ services:
       - key: OTX_API_KEY
         sync: false
 
-  # ── Redis (free tier, 25 MB) ──────────────────────────────────────────────────
-  # Note: Render's free Redis is ephemeral — data does not persist across restarts.
-  # Upgrade to "starter" plan for persistence. The app degrades gracefully
-  # without Redis (falls back to APScheduler in dev mode).
+  # ── Redis / Key Value (free tier, 25 MB) ──────────────────────────────────────
   - type: keyvalue
     name: sigintx-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
 
 # ── PostgreSQL (free tier, 1 GB) ─────────────────────────────────────────────
 databases:
