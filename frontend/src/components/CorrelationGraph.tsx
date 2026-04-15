@@ -32,6 +32,7 @@ import {
   Shield, Newspaper, Target, Zap, X, Info,
 } from 'lucide-react'
 import { sevColor } from '@/lib/utils'
+import type { SeverityLevel } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ function buildLayout(nodes: AiNode[]): Node[] {
           nodeType:    n.type,
           label:       n.label,
           description: n.description,
-          severity:    n.severity,
+         severity:     n.severity as SeverityLevel | null | undefined,
           verified:    n.verified,
           ai_generated: n.ai_generated,
           color:       cfg.color,
