@@ -43,7 +43,7 @@ services:
   # Note: Render's free Redis is ephemeral — data does not persist across restarts.
   # Upgrade to "starter" plan for persistence. The app degrades gracefully
   # without Redis (falls back to APScheduler in dev mode).
-  - type: redis
+  - type: keyvalue
     name: sigintx-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
