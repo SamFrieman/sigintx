@@ -190,7 +190,7 @@ function DetailPanel({
   node, onClose, onVerify,
 }: { node: AiNode; onClose: () => void; onVerify: (id: string) => void }) {
   const cfg   = NODE_CONFIG[node.type] ?? NODE_CONFIG.news
-  const color = node.severity ? sevColor(node.severity) : cfg.color
+  const color = node.severity ? sevColor(node.severity as SeverityLevel) : cfg.color
 
   return (
     <div
