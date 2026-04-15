@@ -139,7 +139,7 @@ function buildLayout(nodes: AiNode[]): Node[] {
 function CorrelationNode({ data }: NodeProps) {
   const cfg   = NODE_CONFIG[data.nodeType] ?? NODE_CONFIG.news
   const Icon  = cfg.icon
-  const color = data.severity ? sevColor(data.severity) : cfg.color
+  const color = data.severity ? sevColor(data.severity as SeverityLevel) : cfg.color
 
   return (
     <div
