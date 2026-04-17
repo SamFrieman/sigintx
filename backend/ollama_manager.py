@@ -27,8 +27,17 @@ logger = logging.getLogger("sigintx.ollama_manager")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-OLLAMA_HOST   = "http://localhost:11434"
+# If OLLAMA_HOST env var is set, use it (supports Cloudflare tunnel / remote host).
+# Otherwise default to local.
+_env_host = os.getenv("OLLAMA_HOST", "").strip().rstrip("/")
+OLLAMA_HOST   = _env_host if _env_host else "http://localhost:11434"
 DEFAULT_MODEL = "llama3.2:3b"   # small enough for CPU-only machines
+
+# True when OLLAMA_HOST points to a remote server — skip local install/start.
+_IS_REMOTE = bool(_env_host) and not any(
+    OLLAMA_HOST.startswith(p)
+    for p in ("http://localhost", "http://127.", "http://::1", "http://0.0.0.0")
+)
 
 # Per-OS silent installer locations
 _INSTALL_URLS = {
@@ -334,11 +343,35 @@ async def ensure_ollama_ready() -> None:
     Full lifecycle:
       detect → (install if missing) → start server → pull model → ready
 
+    When OLLAMA_HOST points to a remote server (e.g. a Cloudflare tunnel),
+    skip the local install/start steps and just verify the remote is reachable.
+
     Runs as a background asyncio task from main.py lifespan.
     Status is exposed via setup_status dict (polled by the frontend).
     """
-    model  = DEFAULT_MODEL
+    model = DEFAULT_MODEL
 
+    # ── Remote host path (Cloudflare tunnel / external Ollama) ────────────────
+    if _IS_REMOTE:
+        _set_status("starting", f"Using remote Ollama at {OLLAMA_HOST}…", 20)
+        if not await _is_server_running():
+            _set_status(
+                "error",
+                f"Remote Ollama at {OLLAMA_HOST} is not reachable. "
+                "Check your tunnel is running and OLLAMA_HOST is correct.",
+                0,
+                "Remote Ollama unreachable",
+            )
+            return
+        _set_status("pulling", f"Remote server reachable. Checking model {model}…", 75)
+        ok = await _pull_model(model)
+        if not ok:
+            _set_status("error", f"Failed to pull model {model} on remote host.", 0, f"Model pull failed: {model}")
+            return
+        _set_status("ready", f"AI ready — {model} on {OLLAMA_HOST}", 100)
+        return
+
+    # ── Local host path (default, auto-install) ───────────────────────────────
     _set_status("starting", "Checking for Ollama installation…", 5)
 
     # ── 1. Find or install binary ─────────────────────────────────────────────

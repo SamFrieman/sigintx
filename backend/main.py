@@ -1508,21 +1508,34 @@ def _validate_setting_value(key: str, value: str) -> None:
     if not value:
         return
     if key == "OLLAMA_HOST":
-        # Only allow loopback / LAN addresses to prevent SSRF via internal network
+        # Rules:
+        #  • Any https:// URL is allowed (encrypted — supports Cloudflare tunnel etc.)
+        #  • http:// is only allowed for localhost / private LAN addresses
+        #  • Cloud metadata endpoints are always blocked regardless of scheme
         from urllib.parse import urlparse
         try:
             parsed = urlparse(value)
-            host = parsed.hostname or ""
+            scheme = parsed.scheme or ""
+            host   = (parsed.hostname or "").lower()
         except Exception:
             raise HTTPException(400, "OLLAMA_HOST must be a valid URL")
-        _safe_hosts = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
-        _safe_prefixes = ("192.168.", "10.", "172.")
-        if not (host in _safe_hosts or any(host.startswith(p) for p in _safe_prefixes)):
-            raise HTTPException(
-                400,
-                "OLLAMA_HOST must point to localhost or a private network address "
-                "(e.g. http://localhost:11434). External hosts are not allowed."
-            )
+        if scheme not in ("http", "https"):
+            raise HTTPException(400, "OLLAMA_HOST must start with http:// or https://")
+        # Block cloud metadata endpoints unconditionally
+        _METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal", "metadata.internal"}
+        if host in _METADATA_HOSTS:
+            raise HTTPException(400, "OLLAMA_HOST points to a forbidden cloud metadata endpoint")
+        # For plain http, restrict to private/loopback only
+        if scheme == "http":
+            _safe_hosts = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
+            _safe_prefixes = ("192.168.", "10.", "172.")
+            if not (host in _safe_hosts or any(host.startswith(p) for p in _safe_prefixes)):
+                raise HTTPException(
+                    400,
+                    "OLLAMA_HOST with http:// must point to localhost or a private network address. "
+                    "Use https:// for external hosts (e.g. a Cloudflare tunnel URL)."
+                )
+        # https:// to any host is allowed (e.g. https://xxx.trycloudflare.com)
     elif key == "WEBHOOK_URL" and value:
         if not _SAFE_URL_RE.match(value):
             raise HTTPException(400, "WEBHOOK_URL must be a valid http/https URL")

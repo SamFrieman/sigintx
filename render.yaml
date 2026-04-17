@@ -36,6 +36,8 @@ services:
         sync: false
       - key: OTX_API_KEY
         sync: false
+      - key: OLLAMA_HOST
+        sync: false
 
 # ── PostgreSQL (free tier, 1 GB) ─────────────────────────────────────────────
 databases:
