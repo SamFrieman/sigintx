@@ -18,7 +18,8 @@ import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from typing import Literal
 from sqlalchemy import select, desc, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,10 +59,58 @@ def _assert_rate_limit(key: str) -> None:
     _last_trigger[key] = now
 
 from session_logger import setup_session_logging, get_recent_logs, RequestLoggingMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 setup_session_logging()   # must run before any other logging calls
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("sigintx.api")
+
+# ── Security headers middleware ───────────────────────────────────────────────
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to every response — works on Render (direct uvicorn)
+    as well as Docker (nginx adds its own copy; duplicates are fine)."""
+
+    _HEADERS = {
+        "X-Content-Type-Options":  "nosniff",
+        "X-Frame-Options":         "DENY",
+        "X-XSS-Protection":        "1; mode=block",
+        "Referrer-Policy":         "strict-origin-when-cross-origin",
+        "Permissions-Policy":      "camera=(), microphone=(), geolocation=()",
+        # HSTS — safe to send; browsers only honour it over HTTPS
+        "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+        # Replace the default "uvicorn" Server header
+        "Server":                  "SIGINTX",
+    }
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        for header, value in self._HEADERS.items():
+            response.headers[header] = value
+        return response
+
+
+# ── Per-IP login rate limiter ─────────────────────────────────────────────────
+import time as _time
+from collections import defaultdict as _defaultdict
+
+_login_attempts: dict[str, list[float]] = _defaultdict(list)
+_LOGIN_MAX          = 8     # attempts per window
+_LOGIN_WINDOW_S     = 300   # 5-minute rolling window
+
+def _check_login_rate(ip: str) -> None:
+    now    = _time.monotonic()
+    window = now - _LOGIN_WINDOW_S
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if t > window]
+    if len(_login_attempts[ip]) >= _LOGIN_MAX:
+        raise HTTPException(429, "Too many login attempts — wait 5 minutes and try again")
+    _login_attempts[ip].append(now)
+
+
+# ── Input allowlists ──────────────────────────────────────────────────────────
+_VALID_SEVERITIES  = {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"}
+_VALID_CATEGORIES  = {"security", "tech", "crypto", "politics", "ai"}
+_VALID_CHANNELS    = {"webhook", "telegram", "both"}
+_VALID_MIN_SEV     = {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"}
 
 # Validate model names — allows Ollama, Groq, OpenRouter, and generic model IDs
 # e.g. llama3.2:3b  /  llama-3.1-8b-instant  /  google/gemini-2.0-flash  /  gpt-4o-mini
@@ -254,6 +303,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ── WebSocket ────────────────────────────────────────────────────────────────
@@ -282,14 +332,15 @@ async def health():
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
 
 
 @app.post("/api/v1/auth/login")
 async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Authenticate a user and return a JWT access token."""
-    ip = request.client.host if request.client else None
+    ip = request.client.host if request.client else "unknown"
+    _check_login_rate(ip)
     user = await authenticate_user(req.username, req.password, db, ip_address=ip)
     if user is None:
         raise HTTPException(401, detail="Invalid username or password")
@@ -347,24 +398,58 @@ async def change_password(
 # ── Alert Rules ───────────────────────────────────────────────────────────────
 
 class RuleCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-    conditions: str          # JSON string
-    min_severity: str = "HIGH"
+    name: str = Field(min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=512)
+    conditions: str = Field(max_length=4096)   # JSON string
+    min_severity: str = Field(default="HIGH", max_length=16)
     cooldown_minutes: int = Field(default=60, ge=1, le=10080)
-    notification_channel: str = "webhook"      # webhook | telegram | both
-    telegram_chat_id: Optional[str] = None     # per-rule override; falls back to global
+    notification_channel: str = Field(default="webhook", max_length=32)
+    telegram_chat_id: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("min_severity")
+    @classmethod
+    def validate_min_severity(cls, v: str) -> str:
+        v = v.upper()
+        if v not in _VALID_MIN_SEV:
+            raise ValueError(f"min_severity must be one of {_VALID_MIN_SEV}")
+        return v
+
+    @field_validator("notification_channel")
+    @classmethod
+    def validate_channel(cls, v: str) -> str:
+        v = v.lower()
+        if v not in _VALID_CHANNELS:
+            raise ValueError(f"notification_channel must be one of {_VALID_CHANNELS}")
+        return v
 
 
 class RulePatch(BaseModel):
     enabled: Optional[bool] = None
-    name: Optional[str] = None
-    description: Optional[str] = None
-    conditions: Optional[str] = None
-    min_severity: Optional[str] = None
-    cooldown_minutes: Optional[int] = None
-    notification_channel: Optional[str] = None
-    telegram_chat_id: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=512)
+    conditions: Optional[str] = Field(default=None, max_length=4096)
+    min_severity: Optional[str] = Field(default=None, max_length=16)
+    cooldown_minutes: Optional[int] = Field(default=None, ge=1, le=10080)
+    notification_channel: Optional[str] = Field(default=None, max_length=32)
+    telegram_chat_id: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("min_severity")
+    @classmethod
+    def validate_min_severity(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.upper()
+            if v not in _VALID_MIN_SEV:
+                raise ValueError(f"min_severity must be one of {_VALID_MIN_SEV}")
+        return v
+
+    @field_validator("notification_channel")
+    @classmethod
+    def validate_channel(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.lower()
+            if v not in _VALID_CHANNELS:
+                raise ValueError(f"notification_channel must be one of {_VALID_CHANNELS}")
+        return v
 
 
 def _serialize_rule(r: AlertRule) -> dict:
@@ -540,21 +625,27 @@ async def get_threat_level(db: AsyncSession = Depends(get_db)):
 # ── News Feed ────────────────────────────────────────────────────────────────
 @app.get("/api/v1/news")
 async def get_news(
-    limit: int = Query(50, le=200),
-    offset: int = Query(0),
-    severity: Optional[str] = Query(None),
-    source: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    severity: Optional[str] = Query(None, max_length=16),
+    source: Optional[str] = Query(None, max_length=128),
+    search: Optional[str] = Query(None, max_length=200),
+    category: Optional[str] = Query(None, max_length=32),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(NewsItem).order_by(desc(NewsItem.published_at))
     if severity:
-        q = q.where(NewsItem.severity == severity.upper())
+        sev_upper = severity.upper()
+        if sev_upper not in _VALID_SEVERITIES:
+            raise HTTPException(400, f"severity must be one of {sorted(_VALID_SEVERITIES)}")
+        q = q.where(NewsItem.severity == sev_upper)
     if source:
         q = q.where(NewsItem.source == source)
     if category:
-        q = q.where(NewsItem.category == category.lower())
+        cat_lower = category.lower()
+        if cat_lower not in _VALID_CATEGORIES:
+            raise HTTPException(400, f"category must be one of {sorted(_VALID_CATEGORIES)}")
+        q = q.where(NewsItem.category == cat_lower)
     if search:
         try:
             fts = await db.execute(
@@ -590,9 +681,9 @@ def _serialize_news(item: NewsItem) -> dict:
 # ── Threat Actors ─────────────────────────────────────────────────────────────
 @app.get("/api/v1/actors")
 async def get_actors(
-    limit: int = Query(50, le=200),
-    search: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    search: Optional[str] = Query(None, max_length=200),
+    country: Optional[str] = Query(None, max_length=64),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(ThreatActor).order_by(ThreatActor.name)
@@ -913,8 +1004,8 @@ Group related nodes: actors link to campaigns they run; campaigns link to techni
 
 # ── Ollama Streaming Analysis ─────────────────────────────────────────────────
 class AnalyzeRequest(BaseModel):
-    item_type: str              # "news" | "cve"
-    item_id: int
+    item_type: Literal["news"]   # only "news" is currently supported
+    item_id: int = Field(ge=1)
     model: Optional[str] = None  # None → provider uses its configured default
 
 
@@ -1132,9 +1223,9 @@ Produce 3-7 distinct hidden campaigns. Only include well-supported patterns with
 # ── AI Analyst (v2.0.0) ──────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=4000)
     model: Optional[str] = None   # None → provider chain picks default
-    hours_back: int = 24
+    hours_back: int = Field(default=24, ge=1, le=72)
 
 
 class BriefingRequest(BaseModel):
@@ -1372,8 +1463,8 @@ _ALL_KNOWN_KEYS = _PUBLIC_KEYS | _SECRET_KEYS
 
 
 class SettingUpdate(BaseModel):
-    key: str
-    value: str
+    key: str = Field(min_length=1, max_length=128)
+    value: str = Field(max_length=2048)
 
 
 @app.get("/api/v1/settings")
@@ -1391,10 +1482,48 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     return result
 
 
+import re as _re_settings
+_SAFE_URL_RE = _re_settings.compile(
+    r'^https?://'                       # must start with http(s)://
+    r'(?:[a-zA-Z0-9\-._~:@%!$&\'()*+,;=]+)'  # host / user info
+    r'(?:/[^\s<>\"{}|\\^`]*)?$'         # optional path — no whitespace or injection chars
+)
+
+def _validate_setting_value(key: str, value: str) -> None:
+    """Raise HTTPException if a setting value fails security checks."""
+    if not value:
+        return
+    if key == "OLLAMA_HOST":
+        # Only allow loopback / LAN addresses to prevent SSRF via internal network
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(value)
+            host = parsed.hostname or ""
+        except Exception:
+            raise HTTPException(400, "OLLAMA_HOST must be a valid URL")
+        _safe_hosts = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
+        _safe_prefixes = ("192.168.", "10.", "172.")
+        if not (host in _safe_hosts or any(host.startswith(p) for p in _safe_prefixes)):
+            raise HTTPException(
+                400,
+                "OLLAMA_HOST must point to localhost or a private network address "
+                "(e.g. http://localhost:11434). External hosts are not allowed."
+            )
+    elif key == "WEBHOOK_URL" and value:
+        if not _SAFE_URL_RE.match(value):
+            raise HTTPException(400, "WEBHOOK_URL must be a valid http/https URL")
+    elif key in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY", "OTX_API_KEY",
+                 "ABUSECH_API_KEY", "TELEGRAM_BOT_TOKEN"):
+        # API keys: no whitespace, reasonable length already enforced by field
+        if any(c in value for c in ('\n', '\r', '\t', '\x00')):
+            raise HTTPException(400, f"{key} contains invalid characters")
+
+
 @app.post("/api/v1/settings")
 async def upsert_setting(body: SettingUpdate, db: AsyncSession = Depends(get_db)):
     if body.key not in _ALL_KNOWN_KEYS:
         raise HTTPException(400, f"Unknown setting key: {body.key}")
+    _validate_setting_value(body.key, body.value)
     existing = await db.get(SettingItem, body.key)
     if existing:
         existing.value = body.value
