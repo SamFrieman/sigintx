@@ -2,9 +2,9 @@
 ## Render reads this file automatically when you connect the GitHub repo.
 ## Docs: https://render.com/docs/blueprint-spec
 ##
-## v4.0 free-tier: single web service + PostgreSQL only.
-## APScheduler runs in-process (no Redis/Celery needed on free tier).
- 
+## Free-tier setup: single web service + PostgreSQL.
+## APScheduler runs in-process (no Redis/Celery required).
+
 services:
   # ── FastAPI backend ──────────────────────────────────────────────────────────
   - type: web
@@ -12,7 +12,7 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 75
     plan: free
     healthCheckPath: /api/v1/health
     envVars:
@@ -24,9 +24,6 @@ services:
         fromDatabase:
           name: sigintx-db
           property: connectionString
-      # NOTE: REDIS_URL is intentionally omitted on free tier.
-      # Without it, the app uses APScheduler (in-process) instead of Celery.
-      # Add it back only if you deploy separate Celery worker + beat services.
       - key: ALLOWED_ORIGINS
         value: "https://sigintx.vercel.app,http://localhost:5173"
       - key: GROQ_API_KEY
@@ -39,7 +36,7 @@ services:
         sync: false
       - key: OTX_API_KEY
         sync: false
- 
+
 # ── PostgreSQL (free tier, 1 GB) ─────────────────────────────────────────────
 databases:
   - name: sigintx-db

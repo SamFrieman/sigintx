@@ -94,7 +94,7 @@ export function useApi<T>(
 }
 
 export async function triggerCollect(type: 'rss' | 'cves' | 'abusech' | 'ransomwatch') {
-  const res = await fetch(`/api/v1/collect/${type}`, { method: 'POST' })
+  const res = await fetch(`${API_BASE}/collect/${type}`, { method: 'POST' })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.detail ?? `Trigger failed: HTTP ${res.status}`)

@@ -109,19 +109,12 @@ async def _run_alert_rules():
 
 def create_scheduler():
     """
-    Return an APScheduler instance (dev mode) or None (Celery handles it).
+    Always return an APScheduler instance.
 
-    The caller must check for None before calling .start().
+    APScheduler runs inside the uvicorn event loop — no separate Celery worker
+    needed. Redis (when present) is used only for WebSocket pub/sub broadcasting,
+    not for task scheduling.
     """
-    if REDIS_URL:
-        logger.info(
-            "REDIS_URL detected — scheduling delegated to Celery Beat. "
-            "APScheduler not started."
-        )
-        return None
-
-    logger.info("No REDIS_URL — starting APScheduler for local dev mode.")
-
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.interval import IntervalTrigger
 
@@ -132,4 +125,5 @@ def create_scheduler():
     scheduler.add_job(_run_briefing,    IntervalTrigger(hours=1),    id="briefing",    max_instances=1, replace_existing=True)
     scheduler.add_job(_run_alert_rules, IntervalTrigger(minutes=5),  id="alert_rules", max_instances=1, replace_existing=True)
 
+    logger.info("APScheduler started (RSS=3m, RansomWatch=10m, Briefing=1h, Rules=5m)")
     return scheduler

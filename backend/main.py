@@ -3,6 +3,9 @@ SIGINTX — FastAPI Application
 REST API + WebSocket for real-time cyber intelligence.
 v3.0.0: Auth layer, alert rules engine, keyboard shortcuts, model manager.
 """
+from dotenv import load_dotenv
+load_dotenv()  # must run before any local imports that read os.getenv at module level
+
 import asyncio
 import json
 import logging
@@ -183,14 +186,15 @@ async def lifespan(app: FastAPI):
     from collectors.rss_collector import seed_default_feeds
     await seed_default_feeds()
 
-    # Start Redis pub/sub subscriber (production) or initial collection (dev)
+    # Always kick off an initial collection pass so the DB is populated on first boot.
+    asyncio.create_task(_initial_collection())
+    asyncio.create_task(_bootstrap_ollama())
+
+    # Start Redis pub/sub subscriber when Redis is available (production).
     import os as _os
     if _os.getenv("REDIS_URL"):
         _redis_subscriber_task = asyncio.create_task(_redis_broadcast_subscriber())
         logger.info("Redis pub/sub subscriber started")
-    else:
-        asyncio.create_task(_initial_collection())
-        asyncio.create_task(_bootstrap_ollama())
 
     set_broadcast(manager.broadcast)
     scheduler = create_scheduler()

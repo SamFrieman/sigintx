@@ -29,13 +29,21 @@ elif DATABASE_URL.startswith("postgresql://"):
 # ── Engine factory ────────────────────────────────────────────────────────────
 
 def _make_engine():
-    if DATABASE_URL.startswith("postgresql"):
+    url = DATABASE_URL
+    # Render, Heroku, Supabase, and Railway all provide postgresql:// or postgres://
+    # but SQLAlchemy async requires the +asyncpg driver specifier.
+    if url.startswith("postgres://"):
+        url = "postgresql+asyncpg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://") and "+asyncpg" not in url:
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+
+    if url.startswith("postgresql"):
         return create_async_engine(
-            DATABASE_URL,
+            url,
             echo=False,
             pool_pre_ping=True,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=5,
+            max_overflow=10,
         )
     else:
         # SQLite — NullPool is safest for aiosqlite, but async_sessionmaker
