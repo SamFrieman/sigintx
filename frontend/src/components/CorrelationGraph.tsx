@@ -32,6 +32,7 @@ import {
   Shield, Newspaper, Target, Zap, X, Info,
 } from 'lucide-react'
 import { sevColor } from '@/lib/utils'
+import { fetchJson } from '@/hooks/useApi'
 import type { SeverityLevel } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -278,15 +279,10 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
     setLoading(true)
     setError(null)
     try {
-      const url = `/api/v1/correlation/ai?hours_back=${hoursBack}${force ? '&force_refresh=true' : ''}`
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('sigintx_token') ?? ''}` },
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.detail ?? `HTTP ${res.status}`)
-      }
-      const data: AiGraphData = await res.json()
+      const data = await fetchJson<AiGraphData>(
+        '/correlation/ai',
+        { hours_back: hoursBack, ...(force ? { force_refresh: 'true' } : {}) },
+      )
       setRawData(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch AI correlation')
