@@ -6,6 +6,7 @@ fires webhooks on matches, and respects per-rule cooldown windows.
 import json
 import logging
 from datetime import datetime, timedelta
+from html import escape as _he
 from typing import Any
 
 import httpx
@@ -34,28 +35,31 @@ async def _fire_telegram(bot_token: str, chat_id: str, text: str) -> bool:
 
 
 def _build_telegram_text(rule: AlertRule, item: dict, item_type: str) -> str:
-    """Format a Telegram alert message."""
-    sev = item.get("severity", "")
-    title = item.get("title") or item.get("cve_id") or "Alert triggered"
-    url = item.get("url", "")
-    sev_emoji = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "INFO": "🔵"}.get(sev, "⚪")
+    """Format a Telegram alert message (HTML parse_mode — all user values escaped)."""
+    sev   = _he(str(item.get("severity", "") or ""))
+    title = _he(str(item.get("title") or item.get("cve_id") or "Alert triggered"))
+    url   = str(item.get("url", "") or "")
+    sev_emoji = {"CRITICAL": "\U0001f534", "HIGH": "\U0001f7e0", "MEDIUM": "\U0001f7e1", "INFO": "\U0001f535"}.get(
+        item.get("severity", ""), "\u26aa"
+    )
     lines = [
         f"{sev_emoji} <b>SIGINTX ALERT</b>",
-        f"",
-        f"<b>Rule:</b> {rule.name}",
-        f"<b>Type:</b> {item_type.upper()}",
+        "",
+        f"<b>Rule:</b> {_he(rule.name)}",
+        f"<b>Type:</b> {_he(item_type.upper())}",
         f"<b>Severity:</b> {sev}",
-        f"",
+        "",
         f"<b>{title}</b>",
     ]
-    if url:
-        lines.append(f'<a href="{url}">View →</a>')
+    # Only include URL if it is a safe http(s) link (prevent javascript: / data: injection)
+    if url and url.startswith(("http://", "https://")):
+        lines.append(f'<a href="{_he(url)}">View</a>')
     actors = item.get("threat_actors", [])
     if actors:
-        lines.append(f"<b>Actors:</b> {', '.join(actors[:3])}")
+        lines.append(f"<b>Actors:</b> {_he(', '.join(str(a) for a in actors[:3]))}")
     cves = item.get("cve_refs", [])
     if cves:
-        lines.append(f"<b>CVEs:</b> {', '.join(cves[:4])}")
+        lines.append(f"<b>CVEs:</b> {_he(', '.join(str(c) for c in cves[:4]))}")
     return "\n".join(lines)
 
 logger = logging.getLogger("sigintx.rules_engine")

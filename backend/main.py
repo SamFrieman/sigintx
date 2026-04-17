@@ -27,7 +27,7 @@ from time import monotonic
 
 from database import (
     init_db, get_db, rebuild_fts,
-    NewsItem, ThreatActor, SettingItem,
+    NewsItem, ThreatActor, SettingItem, User,
     AiBriefing, AiChatMessage, RssFeed, AlertRule, Asset,
 )
 from auth import (
@@ -133,7 +133,9 @@ def _sanitize_fts(q: str) -> str:
 
 async def _get_setting(db: AsyncSession, key: str, default: str = "") -> str:
     row = await db.get(SettingItem, key)
-    return row.value if row else default
+    # Return stored value only when non-empty; fall back to default otherwise
+    # so that settings saved as "" don't break URL construction.
+    return (row.value if row and row.value else default)
 
 # ── WebSocket manager ────────────────────────────────────────────────────────
 class ConnectionManager:
@@ -474,8 +476,19 @@ async def list_rules(db: AsyncSession = Depends(get_db)):
     return [_serialize_rule(r) for r in rows.all()]
 
 
+def _validate_conditions_json(conditions: str) -> None:
+    """Raise HTTP 400 if conditions is not valid JSON or exceeds structural limits."""
+    try:
+        parsed = json.loads(conditions)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, f"conditions must be valid JSON: {exc}")
+    if not isinstance(parsed, (dict, list)):
+        raise HTTPException(400, "conditions must be a JSON object or array")
+
+
 @app.post("/api/v1/rules", status_code=201)
 async def create_rule(body: RuleCreate, db: AsyncSession = Depends(get_db)):
+    _validate_conditions_json(body.conditions)
     rule = AlertRule(
         name=body.name,
         description=body.description,
@@ -503,6 +516,7 @@ async def patch_rule(rule_id: int, body: RulePatch, db: AsyncSession = Depends(g
     if body.description is not None:
         rule.description = body.description
     if body.conditions is not None:
+        _validate_conditions_json(body.conditions)
         rule.conditions = body.conditions
     if body.min_severity is not None:
         rule.min_severity = body.min_severity
@@ -916,7 +930,7 @@ Group related nodes: actors link to campaigns they run; campaigns link to techni
 
     # Attempt 2: extract outermost {} block
     if graph is None:
-        match = _re.search(r'\{[\s\S]+\}', clean)
+        match = _re.search(r'\{[\s\S]+\}', clean[:32_000])
         if match:
             try:
                 graph = json.loads(match.group())
@@ -1177,7 +1191,7 @@ Produce 3-7 distinct hidden campaigns. Only include well-supported patterns with
         try:
             parsed = json.loads(clean)
         except json.JSONDecodeError:
-            match = _re.search(r'\{[\s\S]+\}', clean)
+            match = _re.search(r'\{[\s\S]+\}', clean[:32_000])
             if not match:
                 raise HTTPException(422, "LLM returned non-JSON response")
             parsed = json.loads(match.group())
@@ -1642,11 +1656,28 @@ async def test_setting(body: TestRequest, db: AsyncSession = Depends(get_db)):
 # ── RSS Feed Management ───────────────────────────────────────────────────────
 
 class FeedCreate(BaseModel):
-    name: str
-    url:  str
+    name: str = Field(min_length=1, max_length=128)
+    url:  str = Field(min_length=10, max_length=1024)
 
 class FeedUpdate(BaseModel):
     enabled: bool
+
+def _validate_feed_url(url: str) -> None:
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        raise HTTPException(400, "Invalid feed URL")
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "Feed URL must start with http:// or https://")
+    if not parsed.netloc or "." not in parsed.netloc.split(":")[0]:
+        raise HTTPException(400, "Feed URL must contain a valid hostname")
+    # Reject private/loopback addresses (prevent SSRF via RSS fetch)
+    host = parsed.hostname or ""
+    _blocked = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+    _blocked_pfx = ("192.168.", "10.", "172.", "169.254.", "fd", "fc")
+    if host in _blocked or any(host.startswith(p) for p in _blocked_pfx):
+        raise HTTPException(400, "Feed URL must point to a public host")
 
 @app.get("/api/v1/feeds")
 async def list_feeds(db: AsyncSession = Depends(get_db)):
@@ -1655,8 +1686,7 @@ async def list_feeds(db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/v1/feeds", status_code=201)
 async def add_feed(body: FeedCreate, db: AsyncSession = Depends(get_db)):
-    if not body.url.startswith(("http://", "https://")):
-        raise HTTPException(400, "URL must start with http:// or https://")
+    _validate_feed_url(body.url)
     exists = await db.scalar(select(RssFeed).where(RssFeed.url == body.url))
     if exists:
         raise HTTPException(409, "Feed with this URL already exists")
@@ -1707,15 +1737,15 @@ def _serialize_feed(f: RssFeed) -> dict:
 # ── AI Chat History ───────────────────────────────────────────────────────────
 
 class SaveMessageRequest(BaseModel):
-    session_id: str
-    role:       str   # user | assistant
-    content:    str
-    model_used: Optional[str] = None
+    session_id: str                  = Field(min_length=1, max_length=128)
+    role:       Literal["user", "assistant"]
+    content:    str                  = Field(min_length=1, max_length=32_000)
+    model_used: Optional[str]        = Field(default=None, max_length=128)
 
 @app.get("/api/v1/ai/chat/history")
 async def get_chat_history(
-    session_id: str,
-    limit: int = Query(100, le=500),
+    session_id: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.scalars(
