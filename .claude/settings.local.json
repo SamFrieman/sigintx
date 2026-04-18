@@ -20,7 +20,9 @@
       "Bash(grep -E \"\\\\.\\(db|sqlite|sqlite3|log\\)$\")",
       "Bash(del \"C:\\\\Users\\\\Samfr\\\\OneDrive\\\\Documentos\\\\sigintx\\\\backend\\\\package-lock.json\")",
       "Bash(python -c ' *)",
-      "Bash(python -c \" import pathlib src = pathlib.Path\\('CorrelationGraph.tsx'\\).read_text\\(encoding='utf-8'\\) lines = src.splitlines\\(\\) for i, l in enumerate\\(lines\\): if any\\(x in l for x in ['fetch', 'fetchJson', 'useApi', 'error', 'catch', 'JSON.parse', 'correlation/ai']\\): print\\(i+1, l.strip\\(\\)\\) \")"
+      "Bash(python -c \" import pathlib src = pathlib.Path\\('CorrelationGraph.tsx'\\).read_text\\(encoding='utf-8'\\) lines = src.splitlines\\(\\) for i, l in enumerate\\(lines\\): if any\\(x in l for x in ['fetch', 'fetchJson', 'useApi', 'error', 'catch', 'JSON.parse', 'correlation/ai']\\): print\\(i+1, l.strip\\(\\)\\) \")",
+      "Bash(cat frontend/vite.config.ts)",
+      "Bash(cat frontend/vite.config.js)"
     ]
   },
   "defaults": {
