@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { Shield, ShieldAlert, ExternalLink, Search, ChevronDown, ChevronUp, Cpu, ArrowUpDown } from 'lucide-react'
 import type { CVEItem, CVEStatusValue, SeverityLevel, AnalyzeTarget } from '@/types'
-import { useApi } from '@/hooks/useApi'
+import { useApi, API_BASE } from '@/hooks/useApi'
 import { sevColor, sevBg, sevBorder, cvssColor, timeAgo } from '@/lib/utils'
 
 interface Props { refreshTrigger: number; onAnalyze?: (target: AnalyzeTarget) => void }
@@ -75,7 +75,7 @@ function CveStatusDropdown({ cveId }: { cveId: string }) {
   const handleChange = useCallback(async (next: CVEStatusValue) => {
     setSaving(true)
     try {
-      await fetch(`/api/v1/cves/${cveId}/status`, {
+      await fetch(`${API_BASE}/cves/${cveId}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: next }),

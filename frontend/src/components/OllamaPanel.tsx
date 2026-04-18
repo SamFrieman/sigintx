@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Cpu, AlertTriangle, ChevronDown, Zap } from 'lucide-react'
 import type { AnalyzeTarget } from '@/types'
+import { API_BASE } from '@/hooks/useApi'
 
 // Fallback model list shown when the backend hasn't discovered any models.
 // Covers common Ollama, Groq, and OpenRouter models.
@@ -57,7 +58,7 @@ export function OllamaPanel({ target, onClose }: Props) {
 
   // Load AI status on mount
   useEffect(() => {
-    fetch('/api/v1/ai/status')
+    fetch(`${API_BASE}/ai/status`)
       .then(r => r.ok ? r.json() as Promise<AiStatus> : null)
       .then(data => {
         if (!data) return
@@ -102,7 +103,7 @@ export function OllamaPanel({ target, onClose }: Props) {
     abortRef.current = new AbortController()
 
     try {
-      const resp = await fetch('/api/v1/analyze', {
+      const resp = await fetch(`${API_BASE}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

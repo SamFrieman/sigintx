@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronDown, ChevronUp, ExternalLink, Clock, Sparkles, Target, Shield, AlertTriangle, RefreshCw } from 'lucide-react'
-import { useApi } from '@/hooks/useApi'
+import { useApi, API_BASE } from '@/hooks/useApi'
 import { sevColor, sevBg, sevBorder, timeAgo } from '@/lib/utils'
 import type { SeverityLevel } from '@/types'
 
@@ -354,7 +354,7 @@ export function CampaignTimeline({ refreshTrigger }: Props) {
     setAiLoading(true)
     setAiError(null)
     try {
-      const res = await fetch(`/api/v1/campaigns/ai-discover?days_back=${daysBack}`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/campaigns/ai-discover?days_back=${daysBack}`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.detail ?? `HTTP ${res.status}`)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertOctagon, RefreshCw } from 'lucide-react'
 import type { ThreatLevel } from '@/types'
+import { API_BASE } from '@/hooks/useApi'
 
 const LEVEL_CONFIG: Record<number, { color: string; bg: string; border: string; glow: string }> = {
   1: { color: '#ff1a1a', bg: 'rgba(255,26,26,0.12)',  border: 'rgba(255,26,26,0.5)',  glow: '0 0 24px rgba(255,26,26,0.4)' },
@@ -16,7 +17,7 @@ export function DefconIndicator() {
 
   const fetchLevel = async () => {
     try {
-      const r = await fetch('/api/v1/threat-level')
+      const r = await fetch(`${API_BASE}/threat-level`)
       if (r.ok) setData(await r.json())
     } catch { /* silently ignore */ }
     finally { setLoading(false) }

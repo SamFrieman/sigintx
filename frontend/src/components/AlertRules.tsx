@@ -9,6 +9,7 @@ import {
   CheckCircle, X,
 } from 'lucide-react'
 import { timeAgo } from '@/lib/utils'
+import { API_BASE } from '@/hooks/useApi'
 
 interface AlertRule {
   id:                   number
@@ -430,7 +431,7 @@ export function AlertRules() {
 
   const loadRules = useCallback(async () => {
     try {
-      const r = await fetch('/api/v1/rules')
+      const r = await fetch(`${API_BASE}/rules`)
       if (r.ok) setRules(await r.json())
     } catch { /* ignore */ } finally {
       setLoading(false)
@@ -442,7 +443,7 @@ export function AlertRules() {
   const toggleRule = async (id: number, enabled: boolean) => {
     setRules(prev => prev.map(r => r.id === id ? { ...r, enabled: !enabled } : r))
     try {
-      await fetch(`/api/v1/rules/${id}`, {
+      await fetch(`${API_BASE}/rules/${id}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ enabled: !enabled }),
@@ -455,7 +456,7 @@ export function AlertRules() {
   const deleteRule = async (id: number) => {
     setRules(prev => prev.filter(r => r.id !== id))
     try {
-      await fetch(`/api/v1/rules/${id}`, { method: 'DELETE' })
+      await fetch(`${API_BASE}/rules/${id}`, { method: 'DELETE' })
     } catch {
       await loadRules()
     }
@@ -464,7 +465,7 @@ export function AlertRules() {
   const saveRule = async (data: Partial<AlertRule>) => {
     setSaving(true)
     try {
-      const r = await fetch('/api/v1/rules', {
+      const r = await fetch(`${API_BASE}/rules`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(data),
@@ -481,7 +482,7 @@ export function AlertRules() {
   const testRule = async (id: number) => {
     setTesting(t => ({ ...t, [id]: true }))
     try {
-      const r = await fetch(`/api/v1/rules/${id}/test`, { method: 'POST' })
+      const r = await fetch(`${API_BASE}/rules/${id}/test`, { method: 'POST' })
       if (r.ok) {
         const data = await r.json() as { matches: number; message?: string }
         setTestResults(tr => ({ ...tr, [id]: `${data.matches} recent match${data.matches !== 1 ? 'es' : ''}` }))

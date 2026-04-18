@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Search, X, ExternalLink, Shield, Rss } from 'lucide-react'
 import type { NewsItem, CVEItem } from '@/types'
 import { sevColor, timeAgo } from '@/lib/utils'
+import { API_BASE } from '@/hooks/useApi'
 
 interface Props {
   onNavigate: (tab: string) => void
@@ -19,8 +20,8 @@ interface SearchResults {
 async function searchAll(query: string): Promise<SearchResults> {
   if (!query.trim()) return { news: [], cves: [] }
   const [newsRes, cvesRes] = await Promise.all([
-    fetch(`/api/v1/news?search=${encodeURIComponent(query)}&limit=8`).then(r => r.json()),
-    fetch(`/api/v1/cves?search=${encodeURIComponent(query)}&limit=6`).then(r => r.json()),
+    fetch(`${API_BASE}/news?search=${encodeURIComponent(query)}&limit=8`).then(r => r.json()),
+    fetch(`${API_BASE}/cves?search=${encodeURIComponent(query)}&limit=6`).then(r => r.json()),
   ])
   return { news: newsRes, cves: cvesRes }
 }

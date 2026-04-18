@@ -7,6 +7,7 @@ import {
   FileJson, RefreshCw,
 } from 'lucide-react'
 import { timeAgo } from '@/lib/utils'
+import { API_BASE } from '@/hooks/useApi'
 
 interface WatchlistItem {
   id: number
@@ -72,7 +73,7 @@ export function Watchlists() {
     if (!quiet) setLoading(true)
     else setRefreshing(true)
     try {
-      const r = await fetch('/api/v1/watchlists')
+      const r = await fetch(`${API_BASE}/watchlists`)
       if (r.ok) setItems(await r.json())
     } catch { /* ignore */ } finally {
       setLoading(false)
@@ -96,7 +97,7 @@ export function Watchlists() {
     setCreating(true)
     setCreateError('')
     try {
-      const r = await fetch('/api/v1/watchlists', {
+      const r = await fetch(`${API_BASE}/watchlists`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -127,7 +128,7 @@ export function Watchlists() {
   const toggle = async (item: WatchlistItem) => {
     setItems(prev => prev.map(w => w.id === item.id ? { ...w, enabled: !item.enabled } : w))
     try {
-      await fetch(`/api/v1/watchlists/${item.id}`, {
+      await fetch(`${API_BASE}/watchlists/${item.id}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ enabled: !item.enabled }),
@@ -140,7 +141,7 @@ export function Watchlists() {
   const toggleWebhook = async (item: WatchlistItem) => {
     setItems(prev => prev.map(w => w.id === item.id ? { ...w, notify_webhook: !item.notify_webhook } : w))
     try {
-      await fetch(`/api/v1/watchlists/${item.id}`, {
+      await fetch(`${API_BASE}/watchlists/${item.id}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ notify_webhook: !item.notify_webhook }),
@@ -154,7 +155,7 @@ export function Watchlists() {
     setItems(prev => prev.filter(w => w.id !== id))
     if (expanded === id) setExpanded(null)
     try {
-      await fetch(`/api/v1/watchlists/${id}`, { method: 'DELETE' })
+      await fetch(`${API_BASE}/watchlists/${id}`, { method: 'DELETE' })
     } catch {
       await load(true)
     }

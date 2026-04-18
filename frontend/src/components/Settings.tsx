@@ -5,8 +5,10 @@ import {
   AlertTriangle, FlaskConical, Loader2, Bell, Clock,
   Rss, Plus, Trash2, ToggleLeft, ToggleRight, RefreshCw,
   Bot, Sun, Moon, ScrollText, User, Filter, Lock, Activity,
+  Cpu, Link, ExternalLink,
 } from 'lucide-react'
 import { timeAgo } from '@/lib/utils'
+import { API_BASE } from '@/hooks/useApi'
 
 interface SettingField {
   key: string
@@ -18,6 +20,21 @@ interface SettingField {
 }
 
 const FIELDS: SettingField[] = [
+  {
+    key:         'OLLAMA_HOST',
+    label:       'Ollama Host URL',
+    placeholder: 'https://your-tunnel.trycloudflare.com  or  http://localhost:11434',
+    secret:      false,
+    testable:    true,
+    hint:        'Where your Ollama server is running. Use http://localhost:11434 for local, or a Cloudflare / ngrok tunnel URL (must be https://) for remote access from Render.',
+  },
+  {
+    key:         'AI_MODEL',
+    label:       'Ollama Model',
+    placeholder: 'llama3.2:3b',
+    secret:      false,
+    hint:        'Ollama model to use for AI features. Default: llama3.2:3b (fast, runs on CPU). Other options: llama3.1:8b, mistral:7b, phi3:mini.',
+  },
   {
     key:      'GROQ_API_KEY',
     label:    'Groq API Key',
@@ -174,6 +191,12 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
   const [collectorStatus, setCollectorStatus] = useState<CollectorStatus[]>([])
   const [collectorLoading, setCollectorLoading] = useState(true)
 
+  // Ollama status
+  const [ollamaStatus, setOllamaStatus] = useState<{
+    stage: string; message: string; progress: number; model: string; error: string | null
+  } | null>(null)
+  const [ollamaLoading, setOllamaLoading] = useState(true)
+
   // RSS feed management state
   const [feeds, setFeeds]           = useState<RssFeed[]>([])
   const [feedsLoading, setFeedsLoading] = useState(true)
@@ -183,13 +206,23 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
   const [feedError, setFeedError]     = useState('')
   const [resetting, setResetting]     = useState(false)
 
+  const loadOllamaStatus = useCallback(async () => {
+    setOllamaLoading(true)
+    try {
+      const r = await fetch(`${API_BASE}/ollama/setup-status`)
+      if (r.ok) setOllamaStatus(await r.json())
+    } catch { /* ignore */ } finally {
+      setOllamaLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
-    fetch('/api/v1/settings')
+    fetch(`${API_BASE}/settings`)
       .then(r => r.json())
       .then(data => { setValues(data); setLoading(false) })
       .catch(() => setLoading(false))
 
-    fetch('/api/v1/alert-log?limit=20')
+    fetch(`${API_BASE}/alert-log?limit=20`)
       .then(r => r.json())
       .then(data => { setAlertLog(data); setLogLoading(false) })
       .catch(() => setLogLoading(false))
@@ -197,12 +230,13 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
     loadFeeds()
     loadAuditLog()
     loadCollectorStatus()
+    loadOllamaStatus()
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadCollectorStatus = useCallback(async () => {
     setCollectorLoading(true)
     try {
-      const r = await fetch('/api/v1/collect/status')
+      const r = await fetch(`${API_BASE}/collect/status`)
       if (r.ok) setCollectorStatus(await r.json())
     } catch { /* ignore */ } finally {
       setCollectorLoading(false)
@@ -215,7 +249,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
     if (pwNew.length < 8)     { setPwMsg('New password must be at least 8 characters.'); return }
     setPwStatus('saving'); setPwMsg('')
     try {
-      const r = await fetch('/api/v1/auth/change-password', {
+      const r = await fetch(`${API_BASE}/auth/change-password`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ current_password: pwCurrent, new_password: pwNew }),
@@ -240,7 +274,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
     setAuditLoading(true)
     try {
       const qs = action ? `?limit=50&action=${encodeURIComponent(action)}` : '?limit=50'
-      const r = await fetch(`/api/v1/audit-log${qs}`)
+      const r = await fetch(`${API_BASE}/audit-log${qs}`)
       if (r.ok) setAuditLog(await r.json())
     } catch { /* ignore */ } finally {
       setAuditLoading(false)
@@ -250,7 +284,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
   const loadFeeds = useCallback(async () => {
     setFeedsLoading(true)
     try {
-      const r = await fetch('/api/v1/feeds')
+      const r = await fetch(`${API_BASE}/feeds`)
       if (r.ok) setFeeds(await r.json())
     } catch { /* ignore */ } finally {
       setFeedsLoading(false)
@@ -260,7 +294,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
   const save = async (key: string) => {
     setSaveStatus(s => ({ ...s, [key]: 'saving' }))
     try {
-      const resp = await fetch('/api/v1/settings', {
+      const resp = await fetch(`${API_BASE}/settings`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ key, value: values[key] ?? '' }),
@@ -278,7 +312,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
     setTestStatus(s => ({ ...s, [key]: 'testing' }))
     setTestMsg(m => ({ ...m, [key]: '' }))
     try {
-      const resp = await fetch('/api/v1/settings/test', {
+      const resp = await fetch(`${API_BASE}/settings/test`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ key }),
@@ -302,7 +336,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
     setAddingFeed(true)
     setFeedError('')
     try {
-      const r = await fetch('/api/v1/feeds', {
+      const r = await fetch(`${API_BASE}/feeds`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ name: newFeedName.trim(), url: newFeedUrl.trim() }),
@@ -326,7 +360,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
     // Optimistic update
     setFeeds(prev => prev.map(f => f.id === id ? { ...f, enabled: !enabled } : f))
     try {
-      await fetch(`/api/v1/feeds/${id}`, {
+      await fetch(`${API_BASE}/feeds/${id}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ enabled: !enabled }),
@@ -340,7 +374,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
   const deleteFeed = async (id: number) => {
     setFeeds(prev => prev.filter(f => f.id !== id))
     try {
-      await fetch(`/api/v1/feeds/${id}`, { method: 'DELETE' })
+      await fetch(`${API_BASE}/feeds/${id}`, { method: 'DELETE' })
     } catch {
       await loadFeeds()  // reload on failure
     }
@@ -349,7 +383,7 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
   const resetFeeds = async () => {
     setResetting(true)
     try {
-      await fetch('/api/v1/feeds/reset', { method: 'POST' })
+      await fetch(`${API_BASE}/feeds/reset`, { method: 'POST' })
       await loadFeeds()
     } catch { /* ignore */ } finally {
       setResetting(false)
@@ -487,6 +521,104 @@ export function Settings({ theme, onThemeToggle }: SettingsProps) {
           </motion.div>
         )
       })}
+
+      {/* ── Ollama AI Engine Status ─────────────────────────────────────── */}
+      <div className="panel">
+        <div className="panel-header">
+          <div className="flex items-center gap-2">
+            <Cpu size={11} className="text-[var(--color-primary)]" />
+            <span className="panel-title">OLLAMA AI ENGINE</span>
+          </div>
+          <button
+            onClick={loadOllamaStatus}
+            disabled={ollamaLoading}
+            className="flex items-center gap-1 px-2 py-1 border border-[var(--border-base)] font-mono text-[0.46rem] tracking-widest text-[var(--text-dim)] hover:text-[var(--color-primary)] hover:border-[var(--border-accent)] transition-colors disabled:opacity-40"
+          >
+            <RefreshCw size={8} className={ollamaLoading ? 'animate-spin' : ''} />
+            REFRESH
+          </button>
+        </div>
+
+        <div className="px-4 py-3 flex flex-col gap-3">
+          {/* Status indicator */}
+          {ollamaStatus && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+                {/* Stage badge */}
+                <span
+                  className="font-mono text-[0.5rem] tracking-widest px-2 py-0.5 border shrink-0"
+                  style={{
+                    color:       ollamaStatus.stage === 'ready'  ? 'var(--color-success)'
+                               : ollamaStatus.stage === 'error'  ? 'var(--color-danger)'
+                               : 'var(--color-warning)',
+                    borderColor: ollamaStatus.stage === 'ready'  ? 'rgba(0,255,136,0.35)'
+                               : ollamaStatus.stage === 'error'  ? 'rgba(255,34,85,0.35)'
+                               : 'rgba(255,170,0,0.35)',
+                    background:  ollamaStatus.stage === 'ready'  ? 'rgba(0,255,136,0.06)'
+                               : ollamaStatus.stage === 'error'  ? 'rgba(255,34,85,0.06)'
+                               : 'rgba(255,170,0,0.06)',
+                  }}
+                >
+                  {ollamaStatus.stage.toUpperCase()}
+                </span>
+                <span className="font-mono text-[0.62rem] text-[var(--text-secondary)]">{ollamaStatus.message}</span>
+              </div>
+
+              {/* Progress bar (hidden when ready/error) */}
+              {ollamaStatus.stage !== 'ready' && ollamaStatus.stage !== 'error' && ollamaStatus.progress > 0 && (
+                <div className="h-0.5 bg-[var(--bg-elevated)] w-full overflow-hidden">
+                  <div
+                    className="h-full transition-all duration-500"
+                    style={{ width: `${ollamaStatus.progress}%`, background: 'var(--color-primary)' }}
+                  />
+                </div>
+              )}
+
+              {/* Model + error */}
+              {ollamaStatus.model && (
+                <span className="font-mono text-[0.52rem] text-[var(--text-ghost)]">
+                  Model: <span className="text-[var(--text-dim)]">{ollamaStatus.model}</span>
+                </span>
+              )}
+              {ollamaStatus.error && (
+                <span className="font-mono text-[0.52rem] text-[var(--color-danger)]">✗ {ollamaStatus.error}</span>
+              )}
+            </div>
+          )}
+
+          {/* Setup guide for Cloudflare tunnel */}
+          <div className="border border-[var(--border-base)] bg-[var(--bg-elevated)] px-3 py-2.5 flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <Link size={9} className="text-[var(--color-info)] shrink-0" />
+              <span className="font-mono text-[0.55rem] tracking-widest text-[var(--color-info)]">REMOTE TUNNEL SETUP (NO COMMANDS)</span>
+            </div>
+            <ol className="flex flex-col gap-1">
+              {[
+                { n: '1', text: 'Start Ollama on your local machine (system tray or ollama serve)' },
+                { n: '2', text: 'Go to one.dash.cloudflare.com → Zero Trust → Networks → Tunnels → Create a tunnel' },
+                { n: '3', text: 'Choose "Cloudflared" → name it (e.g. sigintx-ollama) → download & run the Windows connector (.exe installer, no commands needed)' },
+                { n: '4', text: 'Add a public hostname: subdomain = ollama, domain = yourdomain.com, service = http://localhost:11434' },
+                { n: '5', text: 'Paste the resulting https://ollama.yourdomain.com URL into the OLLAMA_HOST field above and click Save' },
+                { n: '6', text: '(Optional) In Cloudflare Access, add a Service Auth policy so only your Render backend can call it' },
+              ].map(s => (
+                <li key={s.n} className="flex items-start gap-2">
+                  <span className="font-mono text-[0.46rem] text-[var(--color-primary)] shrink-0 mt-0.5 w-3">{s.n}.</span>
+                  <span className="font-mono text-[0.52rem] text-[var(--text-muted)] leading-relaxed">{s.text}</span>
+                </li>
+              ))}
+            </ol>
+            <a
+              href="https://one.dash.cloudflare.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 font-mono text-[0.5rem] text-[var(--color-info)] hover:underline mt-0.5 w-fit"
+            >
+              <ExternalLink size={8} />
+              Open Cloudflare Zero Trust Dashboard
+            </a>
+          </div>
+        </div>
+      </div>
 
       {/* ── RSS Feed Management ──────────────────────────────────────────── */}
       <div className="panel">

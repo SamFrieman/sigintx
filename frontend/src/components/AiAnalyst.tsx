@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { AiBriefing, AiStatus, ChatMessage, AgentStep, SeverityLevel } from '@/types'
 import { timeAgo } from '@/lib/utils'
-import { useApi } from '@/hooks/useApi'
+import { useApi, API_BASE } from '@/hooks/useApi'
 const QUICK_PROMPTS = [
   { icon: AlertTriangle, label: 'Critical Threats',   prompt: 'What are the most critical active threats right now? Give me specific CVEs, actors, and immediate actions.' },
   { icon: Users,         label: 'Active Actors',      prompt: 'Which threat actors are most active in the past 24 hours? Summarize their campaigns, TTPs, and targets.' },
@@ -539,7 +539,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   const loadStatus = useCallback(async () => {
     setStatusLoading(true)
     try {
-      const r = await fetch('/api/v1/ai/status')
+      const r = await fetch(`${API_BASE}/ai/status`)
       if (r.ok) {
         const data = await r.json()
         setStatus(data)
@@ -558,7 +558,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
 
   const loadBriefing = useCallback(async () => {
     try {
-      const r = await fetch('/api/v1/ai/briefing')
+      const r = await fetch(`${API_BASE}/ai/briefing`)
       if (r.ok) {
         const data = await r.json()
         if (data.briefing) setBriefing(data.briefing)
@@ -570,7 +570,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
     try {
-      const r = await fetch(`/api/v1/ai/chat/history?session_id=${sessionId.current}`)
+      const r = await fetch(`${API_BASE}/ai/chat/history?session_id=${sessionId.current}`)
       if (r.ok) {
         const rows: { id: number; role: string; content: string; created_at: string; model_used?: string }[] = await r.json()
         if (rows.length > 0) {
@@ -602,7 +602,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   /** Persist a single message to the backend */
   const persistMessage = useCallback(async (role: 'user' | 'assistant', content: string) => {
     try {
-      await fetch('/api/v1/ai/chat/history', {
+      await fetch(`${API_BASE}/ai/chat/history`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -643,7 +643,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
     let steps: AgentStep[] = []
 
     try {
-      const endpoint = agentMode ? '/api/v1/ai/agent/chat' : '/api/v1/ai/chat'
+      const endpoint = agentMode ? `${API_BASE}/ai/agent/chat` : `${API_BASE}/ai/chat`
       const resp = await fetch(endpoint, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -734,7 +734,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
     let accumulated = ''
 
     try {
-      const resp = await fetch('/api/v1/ai/briefing/stream', {
+      const resp = await fetch(`${API_BASE}/ai/briefing/stream`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({}),
@@ -786,7 +786,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   const clearHistory = async () => {
     setClearingHistory(true)
     try {
-      await fetch(`/api/v1/ai/chat/history/${sessionId.current}`, { method: 'DELETE' })
+      await fetch(`${API_BASE}/ai/chat/history/${sessionId.current}`, { method: 'DELETE' })
       setMessages([])
     } catch { /* ignore */ } finally {
       setClearingHistory(false)
@@ -818,7 +818,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   useEffect(() => {
     const poll = async () => {
       try {
-        const r = await fetch('/api/v1/ollama/setup-status')
+        const r = await fetch(`${API_BASE}/ollama/setup-status`)
         if (!r.ok) return
         const data: SetupStatus = await r.json()
         setSetupStatus(data)

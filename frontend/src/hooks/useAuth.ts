@@ -4,6 +4,7 @@
  * Stores JWT in localStorage under key 'sigintx_token'.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { API_BASE } from '@/hooks/useApi'
 
 const TOKEN_KEY = 'sigintx_token'
 const USER_KEY  = 'sigintx_username'
@@ -30,7 +31,7 @@ export function useAuth(): AuthState {
     }
 
     let cancelled = false
-    fetch('/api/v1/auth/me', {
+    fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then(res => {
       if (cancelled) return
@@ -55,7 +56,7 @@ export function useAuth(): AuthState {
 
   const login = useCallback(async (u: string, p: string): Promise<boolean> => {
     try {
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await fetch(`${API_BASE}/auth/login`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ username: u, password: p }),

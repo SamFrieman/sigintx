@@ -8,7 +8,7 @@ import {
   Database, Copy, CheckCheck, Search, Download,
   ChevronDown, ChevronUp, Zap, RefreshCw,
 } from 'lucide-react'
-import { useApi } from '@/hooks/useApi'
+import { useApi, API_BASE } from '@/hooks/useApi'
 import type { IOCItem } from '@/types'
 import { timeAgo } from '@/lib/utils'
 
@@ -374,7 +374,7 @@ export function IocExplorer({ refreshTrigger }: Props) {
       if (sourceFilter)  qp.set('source', sourceFilter)
       if (typeFilter)    qp.set('ioc_type', typeFilter)
       if (search)        qp.set('malware_family', search)
-      const res  = await fetch(`/api/v1/iocs/export?${qp.toString()}`)
+      const res  = await fetch(`${API_BASE}/iocs/export?${qp.toString()}`)
       const blob = await res.blob()
       const a    = document.createElement('a')
       a.href     = URL.createObjectURL(blob)

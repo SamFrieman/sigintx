@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2, Lock, AlertTriangle, Terminal, Shield } from 'lucide-react'
+import { API_BASE } from '@/hooks/useApi'
 
 interface Props {
   onLogin: (token: string, username: string) => void
@@ -28,7 +29,7 @@ export function Login({ onLogin }: Props) {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await fetch('/api/v1/auth/me')
+        const res = await fetch(`${API_BASE}/auth/me`)
         if (cancelled) return
         if (res.ok) {
           // Auth is disabled — server accepts requests without token
@@ -60,7 +61,7 @@ export function Login({ onLogin }: Props) {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await fetch(`${API_BASE}/auth/login`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ username: username.trim(), password }),

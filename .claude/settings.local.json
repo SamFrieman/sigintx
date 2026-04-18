@@ -1,0 +1,102 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''scripts'''',{}\\), indent=2\\)\\)\")",
+      "Bash(python -c \":*)",
+      "Bash(cd /c)",
+      "Read(//c/Users/Samfr/.claude/projects/C--Users-Samfr-OneDrive-Documentos-sigintx/**)",
+      "Bash(python3 -m json.tool)",
+      "Bash(sed -n '883p' '/c/Users/Samfr/.claude/projects/C--Users-Samfr-OneDrive-Documentos-sigintx/0f7f31f0-84b8-4e72-bc27-6bf3e210aefc.jsonl')",
+      "Bash(python3:*)",
+      "Bash(python -c ':*)",
+      "Bash(xargs grep:*)",
+      "Bash(ls /c/Users/Samfr/OneDrive/Documentos/sigintx/backend/*.py)",
+      "Bash(grep -n \"API_KEY\\\\|SECRET\\\\|PASSWORD\" /c/Users/Samfr/OneDrive/Documentos/sigintx/backend/*.py)",
+      "Bash(ls /c/Users/Samfr/OneDrive/Documentos/sigintx/frontend/*.json /c/Users/Samfr/OneDrive/Documentos/sigintx/frontend/*.cjs)",
+      "Bash(grep -E \"\\\\.\\(db|sqlite|sqlite3|log\\)$\")",
+      "Bash(del \"C:\\\\Users\\\\Samfr\\\\OneDrive\\\\Documentos\\\\sigintx\\\\backend\\\\package-lock.json\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \" import pathlib src = pathlib.Path\\('CorrelationGraph.tsx'\\).read_text\\(encoding='utf-8'\\) lines = src.splitlines\\(\\) for i, l in enumerate\\(lines\\): if any\\(x in l for x in ['fetch', 'fetchJson', 'useApi', 'error', 'catch', 'JSON.parse', 'correlation/ai']\\): print\\(i+1, l.strip\\(\\)\\) \")"
+    ]
+  },
+  "defaults": {
+    "execution_strategy": {
+      "exploration": "on_demand",
+      "parallelism": "limited",
+      "efficiency_priority": true
+    },
+    "context_management": {
+      "max_active_files": 6,
+      "prefer_targeted_reads": true,
+      "avoid_full_repo_scan": true,
+      "ignore_directories": [
+        "node_modules",
+        "dist",
+        "build",
+        ".git",
+        ".next",
+        "coverage"
+      ]
+    },
+    "code_generation": {
+      "style": "minimal",
+      "prefer_patch_over_rewrite": true,
+      "avoid_unnecessary_abstractions": true,
+      "no_unsolicited_refactors": true,
+      "no_new_files_without_clear_need": true
+    },
+    "output_control": {
+      "verbosity": "low",
+      "explanations": "minimal",
+      "format_preference": "diff"
+    },
+    "agent_behavior": {
+      "allow_subagents": true,
+      "subagent_usage": "only_when_beneficial",
+      "require_scope_definition": true
+    }
+  },
+  "modes": {
+    "explore": {
+      "exploration": "allowed",
+      "code_generation": false,
+      "goal": "identify relevant files and context only"
+    },
+    "plan": {
+      "exploration": "limited",
+      "code_generation": false,
+      "goal": "design solution before implementation"
+    },
+    "build": {
+      "exploration": "minimal",
+      "code_generation": true,
+      "style": "patch",
+      "goal": "implement with minimal changes"
+    },
+    "debug": {
+      "exploration": "targeted",
+      "code_generation": false,
+      "goal": "find root cause before fixing"
+    },
+    "optimize": {
+      "exploration": "limited",
+      "code_generation": true,
+      "goal": "improve efficiency without rewriting"
+    }
+  },
+  "prompt_instructions": [
+    "Only access files necessary for the task",
+    "Do not scan the entire repository unless explicitly required",
+    "Prefer minimal diffs instead of full rewrites",
+    "Avoid overengineering or adding abstractions unless necessary",
+    "Do not modify unrelated code",
+    "Keep responses concise unless more detail is explicitly requested",
+    "When debugging, identify root cause before implementing fixes",
+    "When implementing, follow the agreed or inferred plan strictly",
+    "Use subagents only when the task clearly benefits from parallel execution"
+  ]
+}

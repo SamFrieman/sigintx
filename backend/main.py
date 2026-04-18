@@ -1568,6 +1568,19 @@ async def upsert_setting(body: SettingUpdate, db: AsyncSession = Depends(get_db)
             _ac.ABUSECH_API_KEY = body.value or None
         except Exception:
             pass
+    elif body.key == "OLLAMA_HOST" and body.value:
+        # Sync module-level variable so running LLM calls immediately use new host
+        try:
+            import ollama_manager as _om
+            _om.OLLAMA_HOST = body.value.rstrip("/")
+            _om._IS_REMOTE = not any(
+                _om.OLLAMA_HOST.startswith(p)
+                for p in ("http://localhost", "http://127.", "http://::1", "http://0.0.0.0")
+            )
+            # Re-run setup check in background with new host
+            asyncio.create_task(_bootstrap_ollama())
+        except Exception:
+            pass
     elif body.key in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY", "LLM_API_URL", "LLM_MODEL",
                        "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
         import os; os.environ[body.key] = body.value

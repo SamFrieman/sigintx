@@ -10,6 +10,7 @@ import {
   HardDrive, RefreshCw, Square, Cpu, ChevronDown, ChevronUp,
   ExternalLink,
 } from 'lucide-react'
+import { API_BASE } from '@/hooks/useApi'
 
 interface InstalledModel {
   name: string
@@ -120,7 +121,7 @@ export function ModelManager({ ollamaOnline, onModelsChanged }: Props) {
     if (!ollamaOnline) return
     setLoading(true)
     try {
-      const r = await fetch('/api/v1/ollama/models')
+      const r = await fetch(`${API_BASE}/ollama/models`)
       if (r.ok) setInstalled(await r.json())
     } catch { /* ignore */ } finally {
       setLoading(false)
@@ -147,7 +148,7 @@ export function ModelManager({ ollamaOnline, onModelsChanged }: Props) {
     }))
 
     try {
-      const resp = await fetch('/api/v1/ollama/pull', {
+      const resp = await fetch(`${API_BASE}/ollama/pull`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ model: modelName }),
@@ -221,7 +222,7 @@ export function ModelManager({ ollamaOnline, onModelsChanged }: Props) {
     if (deleting[modelName]) return
     setDeleting(d => ({ ...d, [modelName]: true }))
     try {
-      const r = await fetch(`/api/v1/ollama/models/${encodeURIComponent(modelName)}`, { method: 'DELETE' })
+      const r = await fetch(`${API_BASE}/ollama/models/${encodeURIComponent(modelName)}`, { method: 'DELETE' })
       if (r.ok) {
         setInstalled(prev => prev.filter(m => m.name !== modelName))
         onModelsChanged()

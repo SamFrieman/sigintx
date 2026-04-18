@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 // When VITE_API_URL is set (e.g. https://sigintx-api.onrender.com), API calls
 // go directly to that origin. Otherwise relative URLs work via the Vite proxy.
 const _apiOrigin = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? ''
-const API_BASE = _apiOrigin ? `${_apiOrigin}/api/v1` : '/api/v1'
+export const API_BASE = _apiOrigin ? `${_apiOrigin}/api/v1` : '/api/v1'
 
 // Stable param serialisation: sort keys so {b:2,a:1} === {a:1,b:2}
 function stableParamKey(params?: Record<string, string | number | boolean | undefined | null>): string {
