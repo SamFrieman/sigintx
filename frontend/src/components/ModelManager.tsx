@@ -46,18 +46,57 @@ const CATALOGUE: {
   desc: string
   recommended?: boolean
 }[] = [
-  { name: 'llama3.2',    tag: '3b',   size: '2.0 GB',  ctx: '128k', desc: 'Meta — best small model for everyday tasks',          recommended: true  },
-  { name: 'llama3.2',    tag: '1b',   size: '1.3 GB',  ctx: '128k', desc: 'Meta — ultra-fast, low RAM footprint'                                    },
-  { name: 'llama3.1',    tag: '8b',   size: '4.7 GB',  ctx: '128k', desc: 'Meta — strong reasoning, good for briefings',         recommended: true  },
-  { name: 'mistral',     tag: '7b',   size: '4.1 GB',  ctx: '32k',  desc: 'Mistral AI — fast, precise instruction following'                        },
-  { name: 'gemma2',      tag: '2b',   size: '1.6 GB',  ctx: '8k',   desc: 'Google — excellent small model',                      recommended: true  },
-  { name: 'gemma2',      tag: '9b',   size: '5.4 GB',  ctx: '8k',   desc: 'Google — strong mid-range performance'                                   },
-  { name: 'qwen2.5',     tag: '3b',   size: '2.0 GB',  ctx: '32k',  desc: 'Alibaba — multilingual, long context'                                    },
-  { name: 'qwen2.5',     tag: '7b',   size: '4.7 GB',  ctx: '128k', desc: 'Alibaba — top coding and reasoning'                                      },
-  { name: 'phi3',        tag: 'mini', size: '2.3 GB',  ctx: '128k', desc: 'Microsoft — fast reasoning, 3.8B params',             recommended: true  },
-  { name: 'deepseek-r1', tag: '7b',   size: '4.7 GB',  ctx: '64k',  desc: 'DeepSeek — strong math/code reasoning'                                   },
-  { name: 'codellama',   tag: '7b',   size: '3.8 GB',  ctx: '16k',  desc: 'Meta — optimised for code analysis and generation'                       },
-  { name: 'nomic-embed-text', tag: 'latest', size: '274 MB', ctx: '8k', desc: 'Nomic — text embeddings, very small'                                 },
+  // ── Meta Llama ───────────────────────────────────────────────────────────────
+  { name: 'llama3.2',    tag: '1b',    size: '1.3 GB',  ctx: '128k', desc: 'Meta — ultra-fast, minimal RAM footprint'                                  },
+  { name: 'llama3.2',    tag: '3b',    size: '2.0 GB',  ctx: '128k', desc: 'Meta — best small model for everyday tasks',         recommended: true     },
+  { name: 'llama3.1',    tag: '8b',    size: '4.7 GB',  ctx: '128k', desc: 'Meta — strong reasoning, great for briefings',       recommended: true     },
+  { name: 'llama3.1',    tag: '70b',   size: '40 GB',   ctx: '128k', desc: 'Meta — flagship quality, requires 48 GB+ RAM'                             },
+  { name: 'llama3.3',    tag: '70b',   size: '43 GB',   ctx: '128k', desc: 'Meta — latest 70B, matches Llama 3.1 405B quality'                        },
+  // ── Mistral ──────────────────────────────────────────────────────────────────
+  { name: 'mistral',     tag: '7b',    size: '4.1 GB',  ctx: '32k',  desc: 'Mistral AI — fast, precise instruction following'                          },
+  { name: 'mistral-nemo',tag: 'latest',size: '7.1 GB',  ctx: '128k', desc: 'Mistral — 12B, long context, multilingual'                                 },
+  { name: 'mixtral',     tag: '8x7b',  size: '26 GB',   ctx: '32k',  desc: 'Mistral — MoE architecture, strong reasoning'                              },
+  // ── Google Gemma ─────────────────────────────────────────────────────────────
+  { name: 'gemma2',      tag: '2b',    size: '1.6 GB',  ctx: '8k',   desc: 'Google — excellent small model',                     recommended: true     },
+  { name: 'gemma2',      tag: '9b',    size: '5.4 GB',  ctx: '8k',   desc: 'Google — strong mid-range performance'                                     },
+  { name: 'gemma2',      tag: '27b',   size: '16 GB',   ctx: '8k',   desc: 'Google — top-tier quality, requires 20 GB RAM'                             },
+  { name: 'gemma3',      tag: '1b',    size: '815 MB',  ctx: '32k',  desc: 'Google — ultra-compact Gemma 3, very fast'                                 },
+  { name: 'gemma3',      tag: '4b',    size: '3.3 GB',  ctx: '128k', desc: 'Google — Gemma 3 small, long context',               recommended: true     },
+  { name: 'gemma3',      tag: '12b',   size: '8.1 GB',  ctx: '128k', desc: 'Google — Gemma 3 mid-range, excellent quality'                             },
+  { name: 'gemma3',      tag: '27b',   size: '17 GB',   ctx: '128k', desc: 'Google — Gemma 3 flagship, requires 20 GB RAM'                             },
+  // ── Microsoft Phi ────────────────────────────────────────────────────────────
+  { name: 'phi3',        tag: 'mini',  size: '2.3 GB',  ctx: '128k', desc: 'Microsoft — Phi-3 mini, fast reasoning, 3.8B params', recommended: true   },
+  { name: 'phi3',        tag: 'medium',size: '7.9 GB',  ctx: '128k', desc: 'Microsoft — Phi-3 medium, 14B params'                                      },
+  { name: 'phi4',        tag: 'latest',size: '9.1 GB',  ctx: '16k',  desc: 'Microsoft — Phi-4, 14B, strong STEM and reasoning'                         },
+  { name: 'phi4-mini',   tag: 'latest',size: '2.5 GB',  ctx: '128k', desc: 'Microsoft — Phi-4 Mini, 3.8B, very capable small model', recommended: true },
+  // ── Alibaba Qwen ─────────────────────────────────────────────────────────────
+  { name: 'qwen2.5',     tag: '0.5b',  size: '397 MB',  ctx: '32k',  desc: 'Alibaba — tiny Qwen, minimal resources'                                    },
+  { name: 'qwen2.5',     tag: '1.5b',  size: '986 MB',  ctx: '32k',  desc: 'Alibaba — sub-1 GB model with solid performance'                           },
+  { name: 'qwen2.5',     tag: '3b',    size: '2.0 GB',  ctx: '32k',  desc: 'Alibaba — multilingual, long context'                                      },
+  { name: 'qwen2.5',     tag: '7b',    size: '4.7 GB',  ctx: '128k', desc: 'Alibaba — top coding and reasoning'                                        },
+  { name: 'qwen2.5',     tag: '14b',   size: '9.0 GB',  ctx: '128k', desc: 'Alibaba — strong mid-range, excellent code'                                },
+  { name: 'qwen2.5',     tag: '32b',   size: '20 GB',   ctx: '128k', desc: 'Alibaba — near-flagship quality'                                           },
+  { name: 'qwen2.5-coder',tag: '7b',   size: '4.7 GB',  ctx: '128k', desc: 'Alibaba — code-specialised Qwen, excellent for analysis'                   },
+  // ── DeepSeek ─────────────────────────────────────────────────────────────────
+  { name: 'deepseek-r1', tag: '1.5b',  size: '1.1 GB',  ctx: '64k',  desc: 'DeepSeek — tiny R1 with chain-of-thought reasoning'                        },
+  { name: 'deepseek-r1', tag: '7b',    size: '4.7 GB',  ctx: '64k',  desc: 'DeepSeek — strong math/code reasoning',             recommended: true     },
+  { name: 'deepseek-r1', tag: '14b',   size: '9.0 GB',  ctx: '64k',  desc: 'DeepSeek — high-quality reasoning model'                                  },
+  { name: 'deepseek-r1', tag: '32b',   size: '20 GB',   ctx: '64k',  desc: 'DeepSeek — near-flagship reasoning'                                       },
+  { name: 'deepseek-v3', tag: 'latest',size: '404 GB',  ctx: '128k', desc: 'DeepSeek — full V3 MoE, requires extreme hardware'                         },
+  // ── Code models ──────────────────────────────────────────────────────────────
+  { name: 'codellama',   tag: '7b',    size: '3.8 GB',  ctx: '16k',  desc: 'Meta — optimised for code analysis and generation'                         },
+  { name: 'codellama',   tag: '13b',   size: '7.4 GB',  ctx: '16k',  desc: 'Meta — larger CodeLlama, better code quality'                              },
+  { name: 'codegemma',   tag: '7b',    size: '5.0 GB',  ctx: '8k',   desc: 'Google — code-focused Gemma variant'                                       },
+  { name: 'starcoder2',  tag: '3b',    size: '1.7 GB',  ctx: '16k',  desc: 'HuggingFace — lightweight code completion'                                 },
+  { name: 'starcoder2',  tag: '7b',    size: '4.0 GB',  ctx: '16k',  desc: 'HuggingFace — strong multi-language code model'                            },
+  // ── Security / specialised ───────────────────────────────────────────────────
+  { name: 'llama-guard3',tag: '8b',    size: '4.7 GB',  ctx: '8k',   desc: 'Meta — content safety classifier, threat detection'                        },
+  { name: 'solar',       tag: 'latest',size: '6.1 GB',  ctx: '4k',   desc: 'Upstage — 10.7B depth-upscaled, strong instruction'                        },
+  { name: 'command-r',   tag: 'latest',size: '19 GB',   ctx: '128k', desc: 'Cohere — RAG-optimised, long context reasoning'                             },
+  // ── Embeddings ───────────────────────────────────────────────────────────────
+  { name: 'nomic-embed-text', tag: 'latest', size: '274 MB', ctx: '8k', desc: 'Nomic — fast text embeddings'                                           },
+  { name: 'mxbai-embed-large',tag: 'latest', size: '670 MB', ctx: '512', desc: 'MixedBread — high-quality embeddings, beats OpenAI ada-002'            },
+  { name: 'all-minilm',  tag: 'latest',size: '46 MB',   ctx: '512',  desc: 'Sentence Transformers — ultra-tiny embeddings'                             },
 ]
 
 function formatBytes(completed: number, total: number): string {
