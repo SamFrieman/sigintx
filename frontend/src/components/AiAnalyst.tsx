@@ -588,9 +588,9 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   }, [])
 
   useEffect(() => {
-    // Throttle loadStatus to at most once every 60 s; briefing/history can refresh freely
+    // Throttle loadStatus to at most once every 15 s; briefing/history can refresh freely
     const now = Date.now()
-    if (now - lastStatusFetchRef.current > 60_000) {
+    if (now - lastStatusFetchRef.current > 15_000) {
       lastStatusFetchRef.current = now
       loadStatus()
     }
@@ -737,7 +737,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
       const resp = await fetch(`${API_BASE}/ai/briefing/stream`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({}),
+        body:    JSON.stringify(selectedModel ? { model: selectedModel } : {}),
         signal:  briefingAbortRef.current.signal,
       })
 
@@ -891,12 +891,13 @@ export function AiAnalyst({ refreshTrigger }: Props) {
                 NO MODELS PULLED
               </span>
             )}
-            {/* Model selector */}
+            {/* Model selector — applies to both chat and briefing */}
             {availableModels.length > 0 && (
               <div className="flex items-center gap-0.5">
+                <span className="font-mono text-[0.38rem] text-[var(--text-ghost)] tracking-widest mr-0.5">MODEL</span>
                 <button
                   onClick={() => setSelectedModel('')}
-                  title="Use default model"
+                  title="Use default model (set in Settings → Ollama Model)"
                   className="font-mono text-[0.42rem] tracking-widest px-1.5 py-0.5 border transition-all"
                   style={{
                     color:       selectedModel === '' ? 'var(--color-primary)' : 'var(--text-ghost)',

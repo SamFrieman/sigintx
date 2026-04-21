@@ -1268,7 +1268,7 @@ async def ollama_setup_status():
 
 
 _ai_status_cache: tuple[float, dict] | None = None
-_AI_STATUS_TTL = 30.0  # seconds — avoids hammering Ollama /api/tags on every render
+_AI_STATUS_TTL = 8.0   # seconds — low enough that newly-pulled models appear quickly
 
 
 @app.get("/api/v1/ai/status")
