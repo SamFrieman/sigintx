@@ -27,17 +27,34 @@ logger = logging.getLogger("sigintx.ollama_manager")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-# If OLLAMA_HOST env var is set, use it (supports Cloudflare tunnel / remote host).
-# Otherwise default to local.
-_env_host = os.getenv("OLLAMA_HOST", "").strip().rstrip("/")
-OLLAMA_HOST   = _env_host if _env_host else "http://localhost:11434"
 DEFAULT_MODEL = "llama3.2:3b"   # small enough for CPU-only machines
 
-# True when OLLAMA_HOST points to a remote server — skip local install/start.
-_IS_REMOTE = bool(_env_host) and not any(
-    OLLAMA_HOST.startswith(p)
-    for p in ("http://localhost", "http://127.", "http://::1", "http://0.0.0.0")
-)
+# If OLLAMA_HOST env var is set AND it points to a real external host, use it.
+# Otherwise always default to local — ignore partial/bare values like "0.0.0.0:11434"
+# that Ollama itself may write to the environment.
+def _resolve_host(raw: str) -> str:
+    """Normalise raw host string → full http(s):// URL or empty string."""
+    v = raw.strip().rstrip("/")
+    if not v:
+        return ""
+    if not v.startswith(("http://", "https://")):
+        v = "http://" + v   # bare host:port — treat as local
+    return v
+
+def _is_local_url(url: str) -> bool:
+    """Return True if url points to localhost / private network."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return (
+        host in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
+        or any(host.startswith(p) for p in ("192.168.", "10.", "172."))
+    )
+
+_env_host = _resolve_host(os.getenv("OLLAMA_HOST", ""))
+OLLAMA_HOST   = _env_host if (_env_host and not _is_local_url(_env_host)) else "http://localhost:11434"
+
+# True only when OLLAMA_HOST is genuinely external (e.g. Cloudflare tunnel).
+_IS_REMOTE = bool(_env_host) and not _is_local_url(_env_host)
 
 # Per-OS silent installer locations
 _INSTALL_URLS = {
@@ -235,7 +252,7 @@ async def _start_server(binary: str) -> bool:
 
     kwargs: dict = {
         "stdout": asyncio.subprocess.DEVNULL,
-        "stderr": asyncio.subprocess.DEVNULL,
+        "stderr": asyncio.subprocess.PIPE,   # capture so errors appear in logs
         "env": env,
     }
 

@@ -237,6 +237,20 @@ async def lifespan(app: FastAPI):
     from collectors.rss_collector import seed_default_feeds
     await seed_default_feeds()
 
+    # Sync OLLAMA_HOST from DB into ollama_manager so both llm.py and main.py
+    # use the same host, and the correct local/remote path is taken on startup.
+    try:
+        from database import SessionLocal as _SL
+        async with _SL() as _db:
+            _saved_host = await _get_setting(_db, "OLLAMA_HOST", "")
+            if _saved_host:
+                import ollama_manager as _om
+                _om.OLLAMA_HOST = _saved_host.rstrip("/")
+                _om._IS_REMOTE  = not _om._is_local_url(_om.OLLAMA_HOST)
+                logger.info("Synced OLLAMA_HOST from DB: %s (remote=%s)", _om.OLLAMA_HOST, _om._IS_REMOTE)
+    except Exception as _e:
+        logger.debug("Could not sync OLLAMA_HOST from DB: %s", _e)
+
     # Always kick off an initial collection pass so the DB is populated on first boot.
     asyncio.create_task(_initial_collection())
     asyncio.create_task(_bootstrap_ollama())
