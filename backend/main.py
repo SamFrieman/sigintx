@@ -909,14 +909,28 @@ IMPORTANT: Edge "source" and "target" values MUST exactly match an "id" value fr
 Schema:
 {{
   "nodes": [
-    {{"id": "unique_snake_case_id", "type": "actor|news|campaign|technique", "label": "max 40 chars", "description": "1 sentence max", "severity": "CRITICAL|HIGH|MEDIUM|INFO"}}
+    {{
+      "id": "unique_snake_case_id",
+      "type": "actor|news|campaign|technique",
+      "label": "max 40 chars",
+      "description": "1-2 sentences of useful context",
+      "severity": "CRITICAL|HIGH|MEDIUM|INFO",
+      "confidence": 85,
+      "country": "origin country for actor nodes, else null",
+      "last_seen": "YYYY-MM or null",
+      "iocs": ["indicator1", "indicator2"],
+      "techniques": ["technique1", "technique2"],
+      "target_sectors": ["finance", "healthcare"],
+      "sources": ["brief source headline 1", "brief source headline 2"]
+    }}
   ],
   "edges": [
-    {{"id": "e1", "source": "exact_node_id", "target": "exact_node_id", "label": "max 25 chars", "type": "linked_to|uses_technique|targets|mentioned_in"}}
+    {{"id": "e1", "source": "exact_node_id", "target": "exact_node_id", "label": "max 25 chars", "type": "linked_to|uses_technique|targets|mentioned_in", "strength": 80}}
   ]
 }}
-Produce 6-10 nodes and 6-14 edges. Make sure every actor and campaign node has at least 2 edges.
-Group related nodes: actors link to campaigns they run; campaigns link to techniques used; news items link to relevant actors/campaigns."""
+Produce 8-14 nodes and 10-18 edges. Make sure every actor and campaign node has at least 2 edges.
+Group related nodes: actors link to campaigns they run; campaigns link to techniques used; news items link to relevant actors/campaigns.
+For iocs use real-looking but anonymised examples (domain patterns, hash prefixes). Keep sources brief (max 60 chars each)."""
 
     messages = [
         {"role": "system", "content": "You are a cybersecurity analyst. Output ONLY valid JSON with no markdown formatting."},
@@ -980,14 +994,27 @@ Group related nodes: actors link to campaigns they run; campaigns link to techni
         ntype = n.get("type", "news")
         if ntype not in ("actor", "news", "campaign", "technique"):
             ntype = "news"
+        # Sanitise list fields
+        def _str_list(v, maxlen=6, itemlen=80) -> list:
+            if not isinstance(v, list): return []
+            return [str(x)[:itemlen] for x in v[:maxlen] if x]
+
         nodes.append({
-            "id":           str(n["id"])[:64],
-            "type":         ntype,
-            "label":        str(n.get("label", ""))[:40],
-            "description":  str(n.get("description", ""))[:300],
-            "severity":     n.get("severity") if n.get("severity") in ("CRITICAL", "HIGH", "MEDIUM", "INFO") else None,
-            "verified":     False,
-            "ai_generated": True,
+            "id":             str(n["id"])[:64],
+            "type":           ntype,
+            "label":          str(n.get("label", ""))[:40],
+            "description":    str(n.get("description", ""))[:400],
+            "severity":       n.get("severity") if n.get("severity") in ("CRITICAL", "HIGH", "MEDIUM", "INFO") else None,
+            "verified":       False,
+            "ai_generated":   True,
+            # ── new enrichment fields ──────────────────────────────────────
+            "confidence":     int(n["confidence"]) if isinstance(n.get("confidence"), (int, float)) else None,
+            "country":        str(n["country"])[:40] if n.get("country") else None,
+            "last_seen":      str(n["last_seen"])[:10] if n.get("last_seen") else None,
+            "iocs":           _str_list(n.get("iocs")),
+            "techniques":     _str_list(n.get("techniques")),
+            "target_sectors": _str_list(n.get("target_sectors")),
+            "sources":        _str_list(n.get("sources"), maxlen=4, itemlen=100),
         })
 
     # ── Validate edges (case-insensitive ID matching) ─────────────────────────
@@ -1016,6 +1043,7 @@ Group related nodes: actors link to campaigns they run; campaigns link to techni
             "target":       tgt_id,
             "label":        str(e.get("label", ""))[:25],
             "type":         etype,
+            "strength":     int(e["strength"]) if isinstance(e.get("strength"), (int, float)) else 60,
             "verified":     False,
             "ai_generated": True,
         })
@@ -1027,6 +1055,151 @@ Group related nodes: actors link to campaigns they run; campaigns link to techni
         "hours_back":   hours_back,
         "generated_at": datetime.utcnow().isoformat(),
         "ai_generated": True,
+    }
+
+
+# ── AI Threat Map Incidents ───────────────────────────────────────────────────
+
+_threat_map_cache: dict = {}
+_THREAT_MAP_TTL = 1800.0  # 30 minutes
+
+
+@app.get("/api/v1/threat-map/incidents")
+async def get_threat_map_incidents(
+    hours_back: int = Query(168, le=720),
+    force_refresh: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ask the configured LLM to analyse recent CRITICAL/HIGH news and return
+    geo-located cyber attack incidents for the globe threat map.
+    Results are cached for 30 minutes.
+    """
+    from time import monotonic
+    cached = _threat_map_cache.get(hours_back)
+    if cached and not force_refresh:
+        ts, payload = cached
+        if monotonic() - ts < _THREAT_MAP_TTL:
+            return payload
+
+    result = await _build_threat_map_incidents(hours_back, db)
+    _threat_map_cache[hours_back] = (monotonic(), result)
+    return result
+
+
+async def _build_threat_map_incidents(hours_back: int, db: AsyncSession) -> dict:
+    """Analyse recent news articles and extract geo-located attack incidents."""
+    import re as _re
+    from datetime import timedelta
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours_back)
+
+    news_rows = (await db.scalars(
+        select(NewsItem)
+        .where(NewsItem.published_at >= cutoff)
+        .where(NewsItem.severity.in_(["CRITICAL", "HIGH"]))
+        .order_by(desc(NewsItem.published_at))
+        .limit(45)
+    )).all()
+
+    if not news_rows:
+        return {"incidents": [], "generated_at": datetime.utcnow().isoformat(),
+                "count": 0, "provider": "none", "hours_back": hours_back}
+
+    now_str = datetime.utcnow().strftime("%B %Y")
+    news_ctx = "\n".join(
+        f"- [{n.severity}][{n.published_at.strftime('%Y-%m-%d') if n.published_at else '?'}] "
+        f"{n.title[:200]}"
+        f" (actors: {', '.join(json.loads(n.threat_actors) if n.threat_actors else []) or 'unknown'})"
+        for n in news_rows
+    )
+
+    prompt = f"""\
+You are a cyber threat analyst. Today is {now_str}.
+Analyse these recent news headlines and identify distinct cyber attacks or campaigns.
+
+=== RECENT CRITICAL/HIGH SEVERITY NEWS ===
+{news_ctx}
+
+=== TASK ===
+Extract up to 15 distinct cyber attacks or campaigns mentioned in the news above.
+For each attack use ONLY the following country names (exact strings):
+Russia, China, North Korea, Iran, USA, UK, Germany, France, Ukraine, Israel,
+India, Japan, Australia, Brazil, Canada, Singapore, Netherlands, Global
+
+Return ONLY valid JSON — no markdown, no explanation:
+{{
+  "incidents": [
+    {{
+      "id": "unique_slug_under_30_chars",
+      "label": "Actor → Target (max 45 chars)",
+      "actor": "Threat actor name or Unknown",
+      "actorCountry": "one country from the approved list",
+      "target": "Target org or sector, Country (max 40 chars)",
+      "targetCountry": "one country from the approved list",
+      "type": "ransomware|espionage|ddos|supply-chain|wiper|phishing",
+      "severity": "CRITICAL|HIGH",
+      "date": "Mon YYYY",
+      "description": "Two sentences: what happened and the impact."
+    }}
+  ]
+}}"""
+
+    messages = [
+        {"role": "system", "content": "You are a cybersecurity analyst. Output ONLY valid JSON."},
+        {"role": "user",   "content": prompt},
+    ]
+
+    from llm import call_llm
+    text, provider = await call_llm(messages, db, temperature=0.1, max_tokens=4000,
+                                    timeout_s=90.0, json_mode=True)
+
+    if not text:
+        return {"incidents": [], "generated_at": datetime.utcnow().isoformat(),
+                "count": 0, "provider": "none", "hours_back": hours_back}
+
+    clean = text.strip()
+    if clean.startswith("```"):
+        clean = "\n".join(clean.split("\n")[1:])
+        clean = clean.rsplit("```", 1)[0].strip()
+
+    data = None
+    try:
+        data = json.loads(clean)
+    except json.JSONDecodeError:
+        match = _re.search(r'\{[\s\S]+\}', clean[:32_000])
+        if match:
+            try:
+                data = json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+    incidents = []
+    for inc in (data or {}).get("incidents", []):
+        if not inc.get("label"):
+            continue
+        incidents.append({
+            "id":           str(inc.get("id", f"inc_{len(incidents)}"))[:40],
+            "label":        str(inc.get("label", "Unknown Attack"))[:50],
+            "actor":        str(inc.get("actor", "Unknown"))[:60],
+            "actorCountry": str(inc.get("actorCountry", "Unknown"))[:30],
+            "target":       str(inc.get("target", "Unknown"))[:60],
+            "targetCountry":str(inc.get("targetCountry", "Unknown"))[:30],
+            "type":         inc.get("type", "espionage") if inc.get("type") in
+                            ("ransomware","espionage","ddos","supply-chain","wiper","phishing")
+                            else "espionage",
+            "severity":     inc.get("severity", "HIGH") if inc.get("severity") in
+                            ("CRITICAL", "HIGH") else "HIGH",
+            "date":         str(inc.get("date", now_str))[:20],
+            "description":  str(inc.get("description", ""))[:400],
+        })
+
+    return {
+        "incidents":    incidents,
+        "generated_at": datetime.utcnow().isoformat(),
+        "count":        len(incidents),
+        "provider":     provider or "unknown",
+        "hours_back":   hours_back,
     }
 
 

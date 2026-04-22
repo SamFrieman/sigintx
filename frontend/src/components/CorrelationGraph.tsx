@@ -45,6 +45,14 @@ interface AiNode {
   severity?: string | null
   verified: boolean
   ai_generated: boolean
+  // Enrichment fields
+  confidence?: number | null
+  country?: string | null
+  last_seen?: string | null
+  iocs?: string[]
+  techniques?: string[]
+  target_sectors?: string[]
+  sources?: string[]
 }
 
 interface AiEdge {
@@ -53,6 +61,7 @@ interface AiEdge {
   target: string
   label: string
   type: string
+  strength?: number
   verified: boolean
   ai_generated: boolean
 }
@@ -120,13 +129,21 @@ function buildLayout(nodes: AiNode[]): Node[] {
         type:     'correlationNode',
         position: { x: startX + i * (NODE_W + W_GAP), y },
         data: {
-          nodeType:    n.type,
-          label:       n.label,
-          description: n.description,
-         severity:     n.severity as SeverityLevel | null | undefined,
-          verified:    n.verified,
-          ai_generated: n.ai_generated,
-          color:       cfg.color,
+          nodeType:      n.type,
+          label:         n.label,
+          description:   n.description,
+          severity:      n.severity as SeverityLevel | null | undefined,
+          verified:      n.verified,
+          ai_generated:  n.ai_generated,
+          color:         cfg.color,
+          confidence:    n.confidence,
+          country:       n.country,
+          last_seen:     n.last_seen,
+          iocs:          n.iocs ?? [],
+          techniques:    n.techniques ?? [],
+          target_sectors: n.target_sectors ?? [],
+          sources:       n.sources ?? [],
+          dimmed:        false,
         },
       })
     }
@@ -142,10 +159,11 @@ function CorrelationNode({ data }: NodeProps) {
   const cfg   = NODE_CONFIG[data.nodeType] ?? NODE_CONFIG.news
   const Icon  = cfg.icon
   const color = data.severity ? sevColor(data.severity as SeverityLevel) : cfg.color
+  const dimmed = data.dimmed
 
   return (
     <div
-      className="relative rounded-sm text-[0.55rem] font-mono select-none"
+      className="relative rounded-sm text-[0.55rem] font-mono select-none transition-all duration-200"
       style={{
         width:       NODE_W,
         minHeight:   NODE_H,
@@ -154,6 +172,8 @@ function CorrelationNode({ data }: NodeProps) {
         boxShadow:   data.verified
           ? `0 0 14px ${color}44, inset 0 0 6px ${color}11`
           : `0 0 6px ${cfg.color}22`,
+        opacity: dimmed ? 0.25 : 1,
+        filter:  dimmed ? 'grayscale(0.5)' : 'none',
       }}
     >
       {/* Type header */}
@@ -166,7 +186,21 @@ function CorrelationNode({ data }: NodeProps) {
           {cfg.label}
           {data.severity && <span className="ml-1 opacity-70">· {data.severity}</span>}
         </span>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
+          {data.confidence != null && (
+            <span
+              className="font-mono text-[0.38rem]"
+              style={{
+                color: data.confidence >= 75
+                  ? 'var(--color-success)'
+                  : data.confidence >= 50
+                    ? 'var(--color-warning)'
+                    : 'var(--color-danger)',
+              }}
+            >
+              {data.confidence}%
+            </span>
+          )}
           {data.verified
             ? <CheckCircle size={9} style={{ color: 'var(--color-success)' }} />
             : <AlertTriangle size={8} style={{ color: 'rgba(255,170,0,0.6)' }} />}
@@ -179,6 +213,30 @@ function CorrelationNode({ data }: NodeProps) {
       >
         {data.label}
       </div>
+      {/* Footer chips */}
+      <div className="px-2 pb-1.5 flex items-center gap-1 flex-wrap">
+        {data.country && (
+          <span
+            className="font-mono text-[0.38rem] px-1 py-0.5 border"
+            style={{ color: cfg.color, borderColor: `${cfg.color}30`, background: `${cfg.color}0d` }}
+          >
+            {data.country}
+          </span>
+        )}
+        {data.iocs?.length > 0 && (
+          <span
+            className="font-mono text-[0.38rem] px-1 py-0.5 border border-[rgba(255,170,0,0.3)] bg-[rgba(255,170,0,0.06)]"
+            style={{ color: 'rgba(255,170,0,0.9)' }}
+          >
+            {data.iocs.length} IOC{data.iocs.length > 1 ? 's' : ''}
+          </span>
+        )}
+        {data.last_seen && (
+          <span className="font-mono text-[0.38rem] text-[var(--text-ghost)]">
+            {data.last_seen}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -188,25 +246,56 @@ const NODE_TYPES = { correlationNode: CorrelationNode }
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
 function DetailPanel({
-  node, onClose, onVerify,
-}: { node: AiNode; onClose: () => void; onVerify: (id: string) => void }) {
+  node, onClose, onVerify, rawData,
+}: {
+  node: AiNode
+  onClose: () => void
+  onVerify: (id: string) => void
+  rawData: AiGraphData | null
+}) {
   const cfg   = NODE_CONFIG[node.type] ?? NODE_CONFIG.news
   const color = node.severity ? sevColor(node.severity as SeverityLevel) : cfg.color
 
+  // Find connected neighbors
+  const neighbors = useMemo(() => {
+    if (!rawData) return []
+    const result: { id: string; label: string; type: string }[] = []
+    rawData.edges.forEach(e => {
+      if (e.source === node.id) {
+        const n = rawData.nodes.find(n => n.id === e.target)
+        if (n) result.push({ id: n.id, label: n.label, type: n.type })
+      } else if (e.target === node.id) {
+        const n = rawData.nodes.find(n => n.id === e.source)
+        if (n) result.push({ id: n.id, label: n.label, type: n.type })
+      }
+    })
+    // Deduplicate
+    return result.filter((v, i, a) => a.findIndex(x => x.id === v.id) === i)
+  }, [rawData, node.id])
+
   return (
     <div
-      className="absolute top-3 right-3 z-30 w-64 border bg-[var(--bg-surface)] shadow-2xl"
+      className="absolute top-3 right-3 z-30 w-72 border bg-[var(--bg-surface)] shadow-2xl overflow-y-auto max-h-[calc(100%-24px)]"
       style={{ borderColor: `${color}55`, borderLeft: `2px solid ${color}` }}
     >
+      {/* Header */}
       <div
-        className="flex items-center justify-between px-3 py-2 border-b"
-        style={{ borderColor: `${color}33`, background: `${color}10` }}
+        className="flex items-center justify-between px-3 py-2 border-b sticky top-0 z-10"
+        style={{ borderColor: `${color}33`, background: `var(--bg-surface)` }}
       >
         <div className="flex items-center gap-1.5">
           <cfg.icon size={10} style={{ color }} />
           <span className="font-mono text-[0.48rem] tracking-widest" style={{ color }}>
             {cfg.label}
           </span>
+          {node.severity && (
+            <span
+              className="font-mono text-[0.42rem] px-1 border"
+              style={{ color, borderColor: `${color}44`, background: `${color}0d` }}
+            >
+              {node.severity}
+            </span>
+          )}
         </div>
         <button onClick={onClose} className="text-[var(--text-ghost)] hover:text-[var(--text-base)] transition-colors">
           <X size={11} />
@@ -214,28 +303,169 @@ function DetailPanel({
       </div>
 
       <div className="p-3 space-y-3">
+        {/* Title */}
         <p className="font-mono text-[0.65rem] text-[var(--text-base)] leading-snug font-semibold">
           {node.label}
         </p>
+
+        {/* Confidence bar */}
+        {node.confidence != null && (
+          <div>
+            <div className="flex justify-between mb-1">
+              <span className="font-mono text-[0.44rem] text-[var(--text-dim)] tracking-widest">CONFIDENCE</span>
+              <span
+                className="font-mono text-[0.44rem]"
+                style={{
+                  color: node.confidence >= 75
+                    ? 'var(--color-success)'
+                    : node.confidence >= 50
+                      ? 'var(--color-warning)'
+                      : 'var(--color-danger)',
+                }}
+              >
+                {node.confidence}%
+              </span>
+            </div>
+            <div className="h-1 bg-[var(--bg-elevated)] rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${node.confidence}%`,
+                  background: node.confidence >= 75
+                    ? 'var(--color-success)'
+                    : node.confidence >= 50
+                      ? 'var(--color-warning)'
+                      : 'var(--color-danger)',
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Description */}
         {node.description && (
           <p className="text-[0.62rem] text-[var(--text-secondary)] leading-relaxed">
             {node.description}
           </p>
         )}
-        <div className="space-y-1 font-mono text-[0.55rem]">
-          {node.severity && (
-            <div className="flex justify-between">
-              <span className="text-[var(--text-dim)]">SEVERITY</span>
-              <span style={{ color }}>{node.severity}</span>
+
+        {/* Meta row */}
+        <div className="grid grid-cols-2 gap-1 font-mono text-[0.5rem]">
+          {node.country && (
+            <div className="border border-[var(--border-base)] px-1.5 py-1">
+              <span className="text-[var(--text-ghost)] block text-[0.42rem] tracking-widest mb-0.5">ORIGIN</span>
+              <span style={{ color }}>{node.country}</span>
             </div>
           )}
-          <div className="flex justify-between">
-            <span className="text-[var(--text-dim)]">VERIFIED</span>
+          {node.last_seen && (
+            <div className="border border-[var(--border-base)] px-1.5 py-1">
+              <span className="text-[var(--text-ghost)] block text-[0.42rem] tracking-widest mb-0.5">LAST SEEN</span>
+              <span className="text-[var(--text-secondary)]">{node.last_seen}</span>
+            </div>
+          )}
+          <div className="border border-[var(--border-base)] px-1.5 py-1">
+            <span className="text-[var(--text-ghost)] block text-[0.42rem] tracking-widest mb-0.5">CONNECTIONS</span>
+            <span className="text-[var(--text-secondary)]">{neighbors.length} nodes</span>
+          </div>
+          <div className="border border-[var(--border-base)] px-1.5 py-1">
+            <span className="text-[var(--text-ghost)] block text-[0.42rem] tracking-widest mb-0.5">VERIFIED</span>
             <span style={{ color: node.verified ? 'var(--color-success)' : 'var(--color-warning)' }}>
               {node.verified ? 'YES' : 'PENDING'}
             </span>
           </div>
         </div>
+
+        {/* Connected nodes */}
+        {neighbors.length > 0 && (
+          <div>
+            <p className="font-mono text-[0.44rem] tracking-widest text-[var(--text-ghost)] mb-1.5">
+              CONNECTED NODES ({neighbors.length})
+            </p>
+            <div className="space-y-0.5">
+              {neighbors.map(n => {
+                const ncfg = NODE_CONFIG[n.type] ?? NODE_CONFIG.news
+                return (
+                  <div key={n.id} className="flex items-center gap-1.5 font-mono text-[0.5rem]">
+                    <div className="w-1.5 h-1.5 rounded-sm shrink-0" style={{ background: ncfg.color }} />
+                    <span className="text-[var(--text-secondary)] truncate">{n.label}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Techniques */}
+        {node.techniques && node.techniques.length > 0 && (
+          <div>
+            <p className="font-mono text-[0.44rem] tracking-widest text-[var(--text-ghost)] mb-1.5">TECHNIQUES</p>
+            <div className="flex flex-wrap gap-1">
+              {node.techniques.map((t, i) => (
+                <span
+                  key={i}
+                  className="font-mono text-[0.44rem] px-1.5 py-0.5 border border-[rgba(0,255,136,0.25)] text-[var(--color-success)] bg-[rgba(0,255,136,0.05)]"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Target sectors */}
+        {node.target_sectors && node.target_sectors.length > 0 && (
+          <div>
+            <p className="font-mono text-[0.44rem] tracking-widest text-[var(--text-ghost)] mb-1.5">TARGET SECTORS</p>
+            <div className="flex flex-wrap gap-1">
+              {node.target_sectors.map((s, i) => (
+                <span
+                  key={i}
+                  className="font-mono text-[0.44rem] px-1.5 py-0.5 border border-[rgba(255,68,68,0.25)] text-[var(--color-danger)] bg-[rgba(255,68,68,0.05)]"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* IOCs */}
+        {node.iocs && node.iocs.length > 0 && (
+          <div>
+            <p className="font-mono text-[0.44rem] tracking-widest text-[var(--color-warning)] mb-1.5">
+              INDICATORS OF COMPROMISE ({node.iocs.length})
+            </p>
+            <div className="space-y-0.5 font-mono text-[0.5rem] text-[var(--text-dim)]">
+              {node.iocs.map((ioc, i) => (
+                <div
+                  key={i}
+                  className="px-1.5 py-0.5 bg-[rgba(247,147,26,0.05)] border border-[rgba(247,147,26,0.15)] truncate"
+                >
+                  {ioc}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Source articles */}
+        {node.sources && node.sources.length > 0 && (
+          <div>
+            <p className="font-mono text-[0.44rem] tracking-widest text-[var(--text-ghost)] mb-1.5">
+              SOURCE INTELLIGENCE ({node.sources.length})
+            </p>
+            <div className="space-y-0.5">
+              {node.sources.map((src, i) => (
+                <div key={i} className="flex items-start gap-1 font-mono text-[0.48rem] text-[var(--text-dim)]">
+                  <span style={{ color: 'var(--color-primary)' }} className="shrink-0">›</span>
+                  <span className="leading-tight">{src}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Verify button */}
         {!node.verified ? (
           <button
             onClick={() => onVerify(node.id)}
@@ -359,6 +589,48 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
 
     setEdges(rfEdges)
   }, [rawData, verified, setNodes, setEdges])
+
+  // When selection changes, dim non-neighbor nodes and highlight connected edges
+  useEffect(() => {
+    if (!rawData || !selectedId) {
+      // Clear all dimming/highlighting
+      setNodes(prev => prev.map(n => ({ ...n, data: { ...n.data, dimmed: false, highlighted: false } })))
+      setEdges(prev => prev.map(e => ({
+        ...e,
+        style: { ...e.style, opacity: 1 },
+        animated: e.data?.baseAnimated ?? e.animated,
+      })))
+      return
+    }
+
+    // Find neighbor IDs
+    const neighborIds = new Set<string>()
+    neighborIds.add(selectedId)
+    rawData.edges.forEach(e => {
+      if (e.source === selectedId) neighborIds.add(e.target)
+      if (e.target === selectedId) neighborIds.add(e.source)
+    })
+
+    // Dim non-neighbors
+    setNodes(prev => prev.map(n => ({
+      ...n,
+      data: { ...n.data, dimmed: !neighborIds.has(n.id) },
+    })))
+
+    // Highlight connected edges, dim others
+    setEdges(prev => prev.map(e => {
+      const isConnected = e.source === selectedId || e.target === selectedId
+      return {
+        ...e,
+        style: {
+          ...e.style,
+          opacity: isConnected ? 1 : 0.1,
+          strokeWidth: isConnected ? (e.style?.strokeWidth ?? 1.5) * 1.8 : e.style?.strokeWidth,
+        },
+        animated: isConnected ? true : false,
+      }
+    }))
+  }, [selectedId, rawData]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleVerify    = useCallback((id: string) => setVerified(p => new Set([...p, id])), [])
   const handleVerifyAll = useCallback(() => {
@@ -572,6 +844,7 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
             node={{ ...selectedNode, verified: verified.has(selectedNode.id) }}
             onClose={() => setSelectedId(null)}
             onVerify={handleVerify}
+            rawData={rawData}
           />
         )}
 

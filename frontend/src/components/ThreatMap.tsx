@@ -1,6 +1,55 @@
 import { useEffect, useRef, useState, useCallback, lazy, Suspense, useMemo } from 'react'
-import { Globe, X, AlertTriangle, MapPin, Clock, Shield, Crosshair } from 'lucide-react'
+import { Globe, X, AlertTriangle, MapPin, Clock, Shield, Crosshair, RefreshCw } from 'lucide-react'
 import type { NewsItem } from '@/types'
+import { API_BASE } from '@/hooks/useApi'
+
+// ── Country → coordinates lookup ─────────────────────────────────────────────
+
+const COUNTRY_COORDS: Record<string, { lat: number; lng: number }> = {
+  'Russia':         { lat: 55.75, lng: 37.62 },
+  'China':          { lat: 39.91, lng: 116.39 },
+  'North Korea':    { lat: 39.02, lng: 125.75 },
+  'Iran':           { lat: 35.69, lng: 51.39 },
+  'USA':            { lat: 38.90, lng: -77.04 },
+  'UK':             { lat: 51.51, lng: -0.13 },
+  'Germany':        { lat: 52.52, lng: 13.41 },
+  'France':         { lat: 48.86, lng: 2.35 },
+  'Ukraine':        { lat: 50.45, lng: 30.52 },
+  'Israel':         { lat: 31.77, lng: 35.22 },
+  'India':          { lat: 28.61, lng: 77.21 },
+  'Japan':          { lat: 35.68, lng: 139.69 },
+  'Australia':      { lat: -33.87, lng: 151.21 },
+  'Brazil':         { lat: -15.78, lng: -47.93 },
+  'Canada':         { lat: 45.42, lng: -75.69 },
+  'Singapore':      { lat: 1.35, lng: 103.82 },
+  'Netherlands':    { lat: 52.37, lng: 4.90 },
+  'NATO':           { lat: 50.85, lng: 4.35 },
+  'Global':         { lat: 40.71, lng: -74.01 },
+  'Europe':         { lat: 50.11, lng: 8.68 },
+}
+
+// ── API incident types ────────────────────────────────────────────────────────
+
+interface ApiIncident {
+  id: string
+  label: string
+  actor: string
+  actorCountry: string
+  target: string
+  targetCountry: string
+  type: 'ransomware' | 'espionage' | 'ddos' | 'supply-chain' | 'wiper' | 'phishing'
+  severity: 'CRITICAL' | 'HIGH'
+  date: string
+  description: string
+}
+
+interface ApiIncidentsResponse {
+  incidents: ApiIncident[]
+  generated_at: string
+  count: number
+  provider: string
+  hours_back: number
+}
 
 // ── Static attack dataset (real documented incidents) ─────────────────────────
 
@@ -36,6 +85,27 @@ const ACTOR_COUNTRY_COLOR: Record<string, string> = {
   'North Korea':    '#aa44ff',
   'Iran':           '#00d4ff',
   'Ukraine/Russia': '#f7931a',
+}
+
+function apiToAttack(inc: ApiIncident, index: number): Attack {
+  const src = COUNTRY_COORDS[inc.actorCountry] ?? { lat: 0, lng: 0 }
+  const tgt = COUNTRY_COORDS[inc.targetCountry] ?? COUNTRY_COORDS['USA']!
+  return {
+    id: inc.id || `ai_${index}`,
+    lat: src.lat + (Math.random() - 0.5) * 2,
+    lng: src.lng + (Math.random() - 0.5) * 2,
+    label: inc.label,
+    target: inc.target,
+    targetLat: tgt.lat + (Math.random() - 0.5) * 2,
+    targetLng: tgt.lng + (Math.random() - 0.5) * 2,
+    actor: inc.actor,
+    actorCountry: inc.actorCountry,
+    type: inc.type,
+    severity: inc.severity,
+    date: inc.date,
+    description: inc.description,
+    color: TYPE_COLOR[inc.type] ?? '#aaaaaa',
+  }
 }
 
 const ATTACKS: Attack[] = [
@@ -437,6 +507,10 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [selected, setSelected] = useState<Selected>(null)
   const [dynamicArcs, setDynamicArcs] = useState<object[]>([])
+  const [aiIncidents, setAiIncidents] = useState<Attack[]>([])
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiProvider, setAiProvider] = useState<string>('')
+  const [aiGenAt, setAiGenAt] = useState<string>('')
 
   // Measure container
   useEffect(() => {
@@ -449,6 +523,25 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // Fetch AI-generated incidents from backend
+  const fetchAiIncidents = useCallback(async () => {
+    setAiLoading(true)
+    try {
+      const r = await fetch(`${API_BASE}/threat-map/incidents`)
+      if (r.ok) {
+        const data: ApiIncidentsResponse = await r.json()
+        if (data.incidents?.length) {
+          setAiIncidents(data.incidents.map((inc, i) => apiToAttack(inc, i)))
+          setAiProvider(data.provider)
+          setAiGenAt(data.generated_at)
+        }
+      }
+    } catch { /* ignore network errors */ }
+    finally { setAiLoading(false) }
+  }, [])
+
+  useEffect(() => { fetchAiIncidents() }, [refreshTrigger])
 
   // Build dynamic arcs from news feed actor mentions
   useEffect(() => {
@@ -499,10 +592,20 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
     document.head.appendChild(style)
   }, [])
 
+  // Merge: AI incidents take priority; static ATTACKS fill in anything not already covered by AI
+  const allAttacks = useMemo<Attack[]>(() => {
+    if (aiIncidents.length > 0) {
+      const aiActors = new Set(aiIncidents.map(a => a.actor.toLowerCase()))
+      const staticFill = ATTACKS.filter(a => !aiActors.has(a.actor.toLowerCase())).slice(0, 8)
+      return [...aiIncidents, ...staticFill]
+    }
+    return ATTACKS
+  }, [aiIncidents])
+
   // Derive unique actor origin nodes
   const actorPoints = useMemo<ActorPoint[]>(() => {
     const map = new Map<string, ActorPoint>()
-    for (const attack of ATTACKS) {
+    for (const attack of allAttacks) {
       if (!map.has(attack.actor)) {
         map.set(attack.actor, {
           nodeType: 'actor',
@@ -517,12 +620,12 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
       map.get(attack.actor)!.attacks.push(attack)
     }
     return Array.from(map.values())
-  }, [])
+  }, [allAttacks])
 
   // One target node per attack at target coordinates
   const targetPoints = useMemo<TargetPoint[]>(() =>
-    ATTACKS.map(a => ({ nodeType: 'target' as const, attack: a, lat: a.targetLat, lng: a.targetLng })),
-  [])
+    allAttacks.map(a => ({ nodeType: 'target' as const, attack: a, lat: a.targetLat, lng: a.targetLng })),
+  [allAttacks])
 
   const allPoints = useMemo<MapPoint[]>(() => [...actorPoints, ...targetPoints], [actorPoints, targetPoints])
 
@@ -530,7 +633,7 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
   const handleAttackClick = useCallback((a: Attack) => setSelected({ kind: 'attack', data: a }), [])
 
   // Build static attack arcs
-  const staticArcs = ATTACKS.map(a => ({
+  const staticArcs = allAttacks.map(a => ({
     startLat: a.lat, startLng: a.lng,
     endLat: a.targetLat, endLng: a.targetLng,
     color: [a.color + 'cc', a.color + '00'],
@@ -552,12 +655,34 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
           <span className="panel-title">GLOBAL THREAT MAP</span>
           <span className="live-dot" />
           <span className="font-mono text-[0.45rem] text-[var(--text-ghost)] tracking-wider">
-            {ATTACKS.length} ATTACKS · {actorPoints.length} ACTORS
+            {allAttacks.length} INCIDENTS · {actorPoints.length} ACTORS
+          </span>
+          {aiLoading && (
+            <span className="font-mono text-[0.42rem] text-[var(--color-primary)] tracking-widest animate-pulse">
+              AI UPDATING...
+            </span>
+          )}
+          {aiProvider && !aiLoading && (
+            <span className="font-mono text-[0.42rem] tracking-widest px-1 border"
+              style={{ color: 'var(--color-primary)', borderColor: 'rgba(0,212,255,0.3)', background: 'rgba(0,212,255,0.06)' }}>
+              AI: {aiProvider.toUpperCase()}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={fetchAiIncidents}
+            disabled={aiLoading}
+            className="flex items-center gap-1 px-1.5 py-0.5 border border-[var(--border-base)] text-[var(--text-ghost)] hover:text-[var(--color-primary)] hover:border-[var(--border-accent)] transition-colors disabled:opacity-40"
+            title="Refresh AI incidents from latest news"
+          >
+            <RefreshCw size={8} className={aiLoading ? 'animate-spin' : ''} />
+            <span className="font-mono text-[0.42rem] tracking-widest">REFRESH</span>
+          </button>
+          <span className="font-mono text-[0.44rem] text-[var(--text-ghost)] tracking-widest">
+            DIAMOND=ORIGIN · CIRCLE=TARGET
           </span>
         </div>
-        <span className="font-mono text-[0.44rem] text-[var(--text-ghost)] tracking-widest">
-          DIAMOND=ORIGIN · CIRCLE=TARGET
-        </span>
       </div>
 
       {/* Globe + detail panel */}
