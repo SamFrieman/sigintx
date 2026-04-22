@@ -713,7 +713,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
         void persistMessage('assistant', finalContent)
       }
     }
-  }, [input, streaming, agentMode, persistMessage])
+  }, [input, streaming, agentMode, selectedModel, persistMessage])
 
   const stopStream = () => {
     abortRef.current?.abort()
@@ -775,7 +775,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
       setBriefingStreaming(false)
       setBriefingLoading(false)
     }
-  }, [briefingLoading, briefingStreaming, loadBriefing])
+  }, [briefingLoading, briefingStreaming, selectedModel, loadBriefing])
 
   const stopBriefing = () => {
     briefingAbortRef.current?.abort()
