@@ -48,7 +48,7 @@ from agents import (
 
 # ── Simple in-memory rate limiter for manual trigger endpoints ───────────────
 _last_trigger: dict[str, float] = {}
-_TRIGGER_COOLDOWN = 30.0   # seconds between manual triggers
+_TRIGGER_COOLDOWN = 10.0   # seconds between manual triggers
 
 def _assert_rate_limit(key: str) -> None:
     now  = monotonic()
@@ -282,7 +282,11 @@ async def lifespan(app: FastAPI):
 
 async def _initial_collection():
     from scheduler import _record_run
+    from collectors import collect_recent_cves, update_kev_flags, seed_threat_actors
+    from correlate import correlate_cve_actors
     await asyncio.sleep(2)
+
+    # News + ransomware
     for label, factory in [
         ("RSS",         collect_all_rss),
         ("RansomWatch", collect_ransomwatch),
@@ -294,8 +298,41 @@ async def _initial_collection():
                 await manager.broadcast({"type": "rss_update", "new_items": count})
         except Exception as e:
             _record_run(label, error=str(e))
-            logger.warning(f"Initial {label} collection error: {e}")
+            logger.warning("Initial %s collection error: %s", label, e)
     await rebuild_fts()
+
+    # CVEs + KEV sync (non-blocking — run in background after news)
+    async def _bg_intel():
+        from scheduler import _record_run as rec
+        for label, fn in [
+            ("CVEs",         collect_recent_cves),
+            ("KEV Sync",     update_kev_flags),
+            ("MITRE Actors", seed_threat_actors),
+        ]:
+            try:
+                count = await fn()
+                rec(label, count)
+            except Exception as e:
+                rec(label, error=str(e))
+                logger.warning("Initial %s error: %s", label, e)
+        # Correlate CVEs with actors after all intel is loaded
+        try:
+            await correlate_cve_actors()
+            from scheduler import _record_run as rec2
+            rec2("Correlation", None)
+        except Exception as e:
+            logger.warning("Initial correlation error: %s", e)
+
+        # GitHub trending — fire once on startup
+        try:
+            from collectors.github_trending_collector import collect_github_trending
+            from scheduler import _record_run as rec3
+            repos = await collect_github_trending()
+            rec3("GitHub Trending", len(repos))
+        except Exception as e:
+            logger.warning("Initial GitHub trending error: %s", e)
+
+    asyncio.create_task(_bg_intel())
 
 
 app = FastAPI(
@@ -1099,7 +1136,7 @@ async def _build_threat_map_incidents(hours_back: int, db: AsyncSession) -> dict
         .where(NewsItem.published_at >= cutoff)
         .where(NewsItem.severity.in_(["CRITICAL", "HIGH"]))
         .order_by(desc(NewsItem.published_at))
-        .limit(45)
+        .limit(20)
     )).all()
 
     if not news_rows:
@@ -1109,7 +1146,7 @@ async def _build_threat_map_incidents(hours_back: int, db: AsyncSession) -> dict
     now_str = datetime.utcnow().strftime("%B %Y")
     news_ctx = "\n".join(
         f"- [{n.severity}][{n.published_at.strftime('%Y-%m-%d') if n.published_at else '?'}] "
-        f"{n.title[:200]}"
+        f"{n.title[:150]}"
         f" (actors: {', '.join(json.loads(n.threat_actors) if n.threat_actors else []) or 'unknown'})"
         for n in news_rows
     )
@@ -1122,25 +1159,25 @@ Analyse these recent news headlines and identify distinct cyber attacks or campa
 {news_ctx}
 
 === TASK ===
-Extract up to 15 distinct cyber attacks or campaigns mentioned in the news above.
-For each attack use ONLY the following country names (exact strings):
+Extract up to 10 distinct cyber attacks or campaigns from the news above.
+Use ONLY these exact country names:
 Russia, China, North Korea, Iran, USA, UK, Germany, France, Ukraine, Israel,
 India, Japan, Australia, Brazil, Canada, Singapore, Netherlands, Global
 
-Return ONLY valid JSON — no markdown, no explanation:
+Return ONLY valid JSON, no markdown:
 {{
   "incidents": [
     {{
-      "id": "unique_slug_under_30_chars",
-      "label": "Actor → Target (max 45 chars)",
-      "actor": "Threat actor name or Unknown",
-      "actorCountry": "one country from the approved list",
-      "target": "Target org or sector, Country (max 40 chars)",
-      "targetCountry": "one country from the approved list",
+      "id": "slug_under_25_chars",
+      "label": "Actor vs Target",
+      "actor": "Threat actor or Unknown",
+      "actorCountry": "country from list",
+      "target": "Target org or sector",
+      "targetCountry": "country from list",
       "type": "ransomware|espionage|ddos|supply-chain|wiper|phishing",
       "severity": "CRITICAL|HIGH",
       "date": "Mon YYYY",
-      "description": "Two sentences: what happened and the impact."
+      "description": "One sentence describing the attack."
     }}
   ]
 }}"""
@@ -1151,8 +1188,8 @@ Return ONLY valid JSON — no markdown, no explanation:
     ]
 
     from llm import call_llm
-    text, provider = await call_llm(messages, db, temperature=0.1, max_tokens=4000,
-                                    timeout_s=90.0, json_mode=True)
+    text, provider = await call_llm(messages, db, temperature=0.1, max_tokens=2000,
+                                    timeout_s=180.0, json_mode=True)
 
     if not text:
         return {"incidents": [], "generated_at": datetime.utcnow().isoformat(),
@@ -1809,6 +1846,33 @@ async def collect_status():
     return get_collector_status()
 
 
+# ── GitHub Trending ───────────────────────────────────────────────────────────
+
+@app.get("/api/v1/github/trending")
+async def github_trending():
+    """Return cached GitHub trending repos. Auto-fetches on first call if cache is cold."""
+    from collectors.github_trending_collector import (
+        get_cached_trending, collect_github_trending, _fetch_in_progress,
+    )
+    cached = get_cached_trending()
+    # Cold cache: trigger a background fetch so the next poll has data
+    if cached["fetched_at"] is None and not _fetch_in_progress:
+        asyncio.create_task(collect_github_trending())
+    return cached
+
+
+@app.post("/api/v1/github/trending/refresh")
+async def github_trending_refresh(_: dict = Depends(get_current_user)):
+    """Manually trigger a GitHub trending refresh (rate-limited to once per minute)."""
+    _assert_rate_limit("github_trending")
+    from collectors.github_trending_collector import collect_github_trending
+    try:
+        repos = await collect_github_trending()
+        return {"ok": True, "count": len(repos)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 # ── Alert Log ─────────────────────────────────────────────────────────────────
 @app.get("/api/v1/alert-log")
 async def get_alert_log(
@@ -2367,3 +2431,230 @@ async def stream_session_logs():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── CVE Explorer ───────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/cves")
+async def get_cves(
+    limit:    int            = Query(50, le=500),
+    sort_by:  str            = Query("priority"),   # priority | cvss | date
+    severity: Optional[str]  = Query(None),
+    in_kev:   Optional[bool] = Query(None),
+    search:   Optional[str]  = Query(None),
+    min_cvss: Optional[float] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return CVE items with optional filters; joins CVEStatus for triage info."""
+    from database import CVEItem, CVEStatus
+
+    q = select(CVEItem)
+    if severity:  q = q.where(CVEItem.severity == severity)
+    if in_kev:    q = q.where(CVEItem.in_kev == True)          # noqa: E712
+    if min_cvss is not None:
+        q = q.where(CVEItem.cvss_score >= min_cvss)
+    if search:
+        like = f"%{search}%"
+        q = q.where((CVEItem.cve_id.ilike(like)) | (CVEItem.description.ilike(like)))
+
+    if sort_by == "cvss":
+        q = q.order_by(CVEItem.cvss_score.desc().nullslast())
+    elif sort_by == "date":
+        q = q.order_by(CVEItem.published_at.desc().nullslast())
+    else:  # priority
+        q = q.order_by(CVEItem.priority_score.desc().nullslast(), CVEItem.cvss_score.desc().nullslast())
+
+    q = q.limit(limit)
+    rows = (await db.scalars(q)).all()
+
+    # Bulk-load statuses
+    cve_ids = [r.cve_id for r in rows]
+    status_rows = (await db.scalars(
+        select(CVEStatus).where(CVEStatus.cve_id.in_(cve_ids))
+    )).all() if cve_ids else []
+    status_map = {s.cve_id: s for s in status_rows}
+
+    result = []
+    for r in rows:
+        st = status_map.get(r.cve_id)
+        result.append({
+            "id":               r.id,
+            "cve_id":           r.cve_id,
+            "description":      r.description,
+            "cvss_score":       r.cvss_score,
+            "cvss_vector":      r.cvss_vector,
+            "severity":         r.severity,
+            "in_kev":           r.in_kev,
+            "epss_score":       r.epss_score,
+            "priority_score":   r.priority_score,
+            "published_at":     r.published_at.isoformat() if r.published_at else None,
+            "modified_at":      r.modified_at.isoformat()  if r.modified_at  else None,
+            "affected_products": json.loads(r.affected_products) if r.affected_products else [],
+            "tags":             json.loads(r.tags)           if r.tags           else [],
+            "threat_actors":    json.loads(r.threat_actors)  if r.threat_actors  else [],
+            # triage
+            "status":           st.status    if st else "open",
+            "status_notes":     st.notes     if st else None,
+            "patched_at":       st.patched_at.isoformat() if st and st.patched_at else None,
+        })
+    return result
+
+
+@app.patch("/api/v1/cves/{cve_id}/status")
+async def update_cve_status(
+    cve_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Upsert CVE triage status (open|investigating|patched|accepted)."""
+    from database import CVEStatus
+    valid = {"open", "investigating", "patched", "accepted"}
+    status = body.get("status", "open")
+    if status not in valid:
+        raise HTTPException(400, f"status must be one of {valid}")
+
+    st = (await db.scalars(select(CVEStatus).where(CVEStatus.cve_id == cve_id))).first()
+    if st is None:
+        st = CVEStatus(cve_id=cve_id)
+        db.add(st)
+    st.status     = status
+    st.notes      = body.get("notes", st.notes)
+    st.updated_at = datetime.utcnow()
+    if status == "patched":
+        st.patched_at = datetime.utcnow()
+    await db.commit()
+    return {"cve_id": cve_id, "status": st.status}
+
+
+# ── IOC Explorer ───────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/iocs")
+async def get_iocs(
+    limit:          int           = Query(100, le=5000),
+    source:         Optional[str] = Query(None),
+    ioc_type:       Optional[str] = Query(None),
+    malware_family: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return IOC items with optional source / type / family filters."""
+    from database import IOCItem
+
+    q = select(IOCItem).order_by(desc(IOCItem.fetched_at))
+    if source:         q = q.where(IOCItem.source == source)
+    if ioc_type:       q = q.where(IOCItem.ioc_type == ioc_type)
+    if malware_family: q = q.where(IOCItem.malware_family.ilike(f"%{malware_family}%"))
+    q = q.limit(limit)
+    rows = (await db.scalars(q)).all()
+
+    return [
+        {
+            "id":             r.id,
+            "ioc_type":       r.ioc_type,
+            "value":          r.value,
+            "malware_family": r.malware_family,
+            "source":         r.source,
+            "tags":           json.loads(r.tags) if r.tags else [],
+            "confidence":     r.confidence,
+            "first_seen":     r.first_seen.isoformat() if r.first_seen else None,
+            "fetched_at":     r.fetched_at.isoformat() if r.fetched_at else None,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/v1/iocs/export")
+async def export_iocs(
+    format:         str           = Query("csv"),
+    limit:          int           = Query(50000, le=200000),
+    source:         Optional[str] = Query(None),
+    ioc_type:       Optional[str] = Query(None),
+    malware_family: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export IOCs as CSV or JSON."""
+    from database import IOCItem
+    import csv, io
+
+    q = select(IOCItem).order_by(desc(IOCItem.fetched_at))
+    if source:         q = q.where(IOCItem.source == source)
+    if ioc_type:       q = q.where(IOCItem.ioc_type == ioc_type)
+    if malware_family: q = q.where(IOCItem.malware_family.ilike(f"%{malware_family}%"))
+    q = q.limit(limit)
+    rows = (await db.scalars(q)).all()
+
+    data = [
+        {
+            "ioc_type": r.ioc_type, "value": r.value,
+            "malware_family": r.malware_family or "",
+            "source": r.source, "confidence": r.confidence,
+            "first_seen": r.first_seen.isoformat() if r.first_seen else "",
+        }
+        for r in rows
+    ]
+
+    if format == "json":
+        return StreamingResponse(
+            iter([json.dumps(data, indent=2)]),
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=sigintx_iocs.json"},
+        )
+
+    # CSV
+    buf = io.StringIO()
+    if data:
+        writer = csv.DictWriter(buf, fieldnames=list(data[0].keys()))
+        writer.writeheader()
+        writer.writerows(data)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=sigintx_iocs.csv"},
+    )
+
+
+# ── DEFCON Level ───────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/defcon")
+async def get_defcon(db: AsyncSession = Depends(get_db)):
+    """
+    Derive a DEFCON-style threat level (1-5) from recent news severity mix.
+    5 = normal, 1 = maximum threat.
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    news_rows = (await db.scalars(
+        select(NewsItem)
+        .where(NewsItem.published_at >= cutoff)
+        .order_by(desc(NewsItem.published_at))
+        .limit(200)
+    )).all()
+
+    if not news_rows:
+        return {"level": 5, "label": "NORMAL", "description": "No recent intelligence collected."}
+
+    counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "INFO": 0}
+    for n in news_rows:
+        sev = (n.severity or "INFO").upper()
+        counts[sev] = counts.get(sev, 0) + 1
+
+    total = len(news_rows)
+    crit_pct = counts["CRITICAL"] / total
+    high_pct = counts["HIGH"]     / total
+
+    if crit_pct > 0.25:
+        level, label = 1, "MAXIMUM"
+    elif crit_pct > 0.12 or high_pct > 0.40:
+        level, label = 2, "ELEVATED"
+    elif crit_pct > 0.05 or high_pct > 0.25:
+        level, label = 3, "GUARDED"
+    elif high_pct > 0.10:
+        level, label = 4, "LOW"
+    else:
+        level, label = 5, "NORMAL"
+
+    return {
+        "level":       level,
+        "label":       label,
+        "description": f"{counts['CRITICAL']} CRITICAL, {counts['HIGH']} HIGH out of {total} items (24h)",
+        "counts":      counts,
+        "total":       total,
+    }

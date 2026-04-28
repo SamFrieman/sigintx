@@ -625,7 +625,7 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
         style: {
           ...e.style,
           opacity: isConnected ? 1 : 0.1,
-          strokeWidth: isConnected ? (e.style?.strokeWidth ?? 1.5) * 1.8 : e.style?.strokeWidth,
+          strokeWidth: isConnected ? ((Number(e.style?.strokeWidth) || 1.5) * 1.8) : e.style?.strokeWidth,
         },
         animated: isConnected ? true : false,
       }
