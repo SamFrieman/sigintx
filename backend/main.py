@@ -998,24 +998,24 @@ async def _build_ai_correlation(hours_back: int, db: AsyncSession, model_overrid
     for aname_lower, news_ids in mentioned.items():
         dba = actor_lookup.get(aname_lower)
         if dba:
-            nid = safe_id(dba.name)
-            techs   = _str_list(json.loads(dba.techniques) if dba.techniques else [], maxlen=6)
-            aliases = _str_list(json.loads(dba.aliases)    if dba.aliases    else [], maxlen=3)
-            last_s  = dba.last_activity.strftime("%Y-%m") if dba.last_activity else None
-            desc    = (dba.description or "")[:300] or f"Threat actor active in {len(news_ids)} recent reports."
-            conf    = 95
-            country = dba.country
+            nid      = safe_id(dba.name)
+            techs    = _str_list(json.loads(dba.techniques) if dba.techniques else [], maxlen=6)
+            aliases  = _str_list(json.loads(dba.aliases)    if dba.aliases    else [], maxlen=3)
+            last_s   = dba.last_activity.strftime("%Y-%m") if dba.last_activity else None
+            node_desc = (dba.description or "")[:300] or f"Threat actor active in {len(news_ids)} recent reports."
+            conf     = 95
+            country  = dba.country
             verified = True
         else:
             # Actor not in DB — create a skeleton node
-            display = aname_lower.title()
-            nid     = safe_id(display)
-            techs   = []
-            aliases = []
-            last_s  = None
-            desc    = f"Threat actor referenced in {len(news_ids)} recent intelligence items."
-            conf    = 60
-            country = None
+            display  = aname_lower.title()
+            nid      = safe_id(display)
+            techs    = []
+            aliases  = []
+            last_s   = None
+            node_desc = f"Threat actor referenced in {len(news_ids)} recent intelligence items."
+            conf     = 60
+            country  = None
             verified = False
 
         actor_node_ids[aname_lower] = nid
@@ -1023,7 +1023,7 @@ async def _build_ai_correlation(hours_back: int, db: AsyncSession, model_overrid
             "id":             nid,
             "type":           "actor",
             "label":          (dba.name if dba else aname_lower.title())[:40],
-            "description":    desc,
+            "description":    node_desc,
             "severity":       "HIGH",
             "verified":       verified,
             "ai_generated":   False,
