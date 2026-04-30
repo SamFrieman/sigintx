@@ -46,6 +46,27 @@ const GLOBAL_ANCHORS: { lat: number; lng: number }[] = [
   { lat: -23.55, lng: -46.63 },  // São Paulo
 ]
 
+// Each category gets its own angular offset from the country centroid so items
+// from different categories never occupy the same cluster on the globe.
+// Values are [Δlat, Δlng] in degrees.
+const CAT_CLUSTER_OFFSET: Record<string, [number, number]> = {
+  security: [ 3.2,  0.0 ],   // north
+  tech:     [ 0.0,  3.2 ],   // east
+  crypto:   [-3.2,  0.0 ],   // south
+  politics: [ 0.0, -3.2 ],   // west
+  ai:       [ 2.2,  2.2 ],   // north-east
+}
+
+// Altitude (above globe surface) per category — staggering layers means
+// overlapping HTML elements land at different z-depths and stay clickable.
+const CAT_ALTITUDE: Record<string, number> = {
+  security: 0.050,
+  tech:     0.038,
+  crypto:   0.028,
+  politics: 0.020,
+  ai:       0.014,
+}
+
 // ── Actor → country (primary geo signal) ─────────────────────────────────────
 
 const ACTOR_COUNTRY: [string, string][] = [
@@ -280,49 +301,61 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
       return { item, country: raw }
     })
 
-    // Count total items per geo-key (for radius calculation)
-    const totals: Record<string, number> = {}
+    // Build final points.
+    // Strategy: each (country, category) pair gets its own cluster centre,
+    // offset from the country centroid by CAT_CLUSTER_OFFSET.  Within each
+    // cluster, items spread via a small Fibonacci spiral (max radius 1.8°).
+    // This guarantees ≤10 items per cluster and no two clusters share the
+    // same centre, eliminating all overlap between categories at the same
+    // country.  Global items cycle across dedicated world-city anchors.
+
+    // Count items per cluster key so we can size the spiral correctly
+    const clusterTotals: Record<string, number> = {}
     const globalIdx = { n: 0 }
 
-    for (const { country } of located) {
+    for (const { item, country } of located) {
       if (country === 'Global') continue
-      totals[country] = (totals[country] ?? 0) + 1
+      const key = `${country}::${item.category}`
+      clusterTotals[key] = (clusterTotals[key] ?? 0) + 1
     }
-    totals['Global'] = located.filter(l => l.country === 'Global').length
 
-    // Build final points with sunflower spiral spread
-    const countryIdx: Record<string, number> = {}
+    const clusterIdx: Record<string, number> = {}
     const pts: NewsPoint[] = []
 
     for (const { item, country } of located) {
-      const cat = item.category as NewsCategory
+      const cat   = item.category as NewsCategory
       const color = CAT_COLOR[cat] ?? '#aaaaaa'
       const sz    = SEV_SIZE[item.severity] ?? 6
 
       if (country === 'Global') {
-        // Cycle through world anchors so globals aren't piled up
         const anchor = GLOBAL_ANCHORS[globalIdx.n % GLOBAL_ANCHORS.length]
         globalIdx.n++
-        const jLat = (Math.random() - 0.5) * 3
-        const jLng = (Math.random() - 0.5) * 3
+        // Small random jitter so two globals at the same anchor don't stack
+        const jLat = (Math.random() - 0.5) * 2.5
+        const jLng = (Math.random() - 0.5) * 2.5
         pts.push({ id: item.id, lat: anchor.lat + jLat, lng: anchor.lng + jLng, country, item, color, size: sz })
         continue
       }
 
-      const base  = COUNTRY_COORDS[country] ?? COUNTRY_COORDS['USA']!
-      const total = totals[country] ?? 1
-      const idx   = countryIdx[country] ?? 0
-      countryIdx[country] = idx + 1
+      const base              = COUNTRY_COORDS[country] ?? COUNTRY_COORDS['USA']!
+      const [dLat, dLng]      = CAT_CLUSTER_OFFSET[cat] ?? [0, 0]
+      const clusterLat        = base.lat + dLat
+      const clusterLng        = base.lng + dLng
+      const clusterKey        = `${country}::${cat}`
+      const total             = clusterTotals[clusterKey] ?? 1
+      const idx               = clusterIdx[clusterKey] ?? 0
+      clusterIdx[clusterKey]  = idx + 1
 
-      // Sunflower (Fibonacci) spiral — fills space evenly without gaps
-      const angle     = idx * 2.3999  // ≈ golden angle in radians
-      const maxRadius = Math.min(5.5, 1.2 + Math.sqrt(total) * 1.0)
-      const r         = total === 1 ? 0 : Math.sqrt((idx + 0.5) / total) * maxRadius
+      // Fibonacci spiral within cluster — max radius 1.8° keeps items tight
+      // but fully separated at normal globe zoom
+      const angle      = idx * 2.3999           // golden angle ≈ 137.5°
+      const maxR       = 1.8
+      const r          = total === 1 ? 0 : Math.sqrt((idx + 0.5) / total) * maxR
 
       pts.push({
         id:      item.id,
-        lat:     base.lat + Math.cos(angle) * r,
-        lng:     base.lng + Math.sin(angle) * r,
+        lat:     clusterLat + Math.cos(angle) * r,
+        lng:     clusterLng + Math.sin(angle) * r,
         country,
         item,
         color,
@@ -436,7 +469,13 @@ export function ThreatMap({ news, refreshTrigger }: Props) {
                 htmlElementsData={visiblePoints}
                 htmlLat={(d: object) => (d as NewsPoint).lat}
                 htmlLng={(d: object) => (d as NewsPoint).lng}
-                htmlAltitude={(d: object) => (d as NewsPoint).item.severity === 'CRITICAL' ? 0.04 : 0.018}
+                htmlAltitude={(d: object) => {
+                  const p = d as NewsPoint
+                  // Base altitude from category (separates Z-layers so clicks never block)
+                  // CRITICAL gets a small extra boost so it sits on top within its category
+                  const base = CAT_ALTITUDE[p.item.category] ?? 0.02
+                  return p.item.severity === 'CRITICAL' ? base + 0.008 : base
+                }}
                 htmlElement={(d: object) => makeNewsNode(d as NewsPoint, handleClick)}
                 ringsData={ringData}
                 ringLat="lat"
