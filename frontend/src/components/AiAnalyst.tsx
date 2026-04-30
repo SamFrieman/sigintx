@@ -981,14 +981,8 @@ export function AiAnalyst({ refreshTrigger }: Props) {
                 }
               </span>
             </div>
-            {/* Warn if online but no models pulled */}
-            {isOnline && availableModels.length === 0 && !statusLoading && (
-              <span className="font-mono text-[0.44rem] text-[var(--color-warning)] tracking-widest">
-                NO MODELS PULLED
-              </span>
-            )}
-            {/* Model selector — applies to both chat and briefing */}
-            {availableModels.length > 0 && (
+            {/* Model selector — always shows full catalog; dimmed if not yet installed */}
+            {isOnline && (
               <div className="flex items-center gap-0.5">
                 <span className="font-mono text-[0.38rem] text-[var(--text-ghost)] tracking-widest mr-0.5">MODEL</span>
                 <button
@@ -1004,23 +998,35 @@ export function AiAnalyst({ refreshTrigger }: Props) {
                   <span>AUTO</span>
                   <span className="text-[0.36rem] opacity-60 tracking-normal">default</span>
                 </button>
-                {availableModels.map(m => {
-                  const cat = MODEL_CATALOG.find(c => c.id === m || m.startsWith(c.id.split(':')[0]))
-                  const active = selectedModel === m
+                {MODEL_CATALOG.map(cat => {
+                  const installed = availableModels.some(m => m === cat.id || m.startsWith(cat.id.split(':')[0]))
+                  const active    = selectedModel === cat.id || availableModels.some(m => m.startsWith(cat.id.split(':')[0]) && selectedModel === m)
                   return (
                     <button
-                      key={m}
-                      onClick={() => setSelectedModel(m)}
-                      title={`${m}${cat ? ` — ${cat.spec}` : ''}`}
+                      key={cat.id}
+                      onClick={() => {
+                        if (installed) {
+                          // Use the exact installed name (may have a tag suffix)
+                          const match = availableModels.find(m => m === cat.id || m.startsWith(cat.id.split(':')[0]))
+                          setSelectedModel(match ?? cat.id)
+                        } else {
+                          // Not installed — jump to MODELS tab to pull
+                          setActivePanel('models')
+                        }
+                      }}
+                      title={installed ? `${cat.id} — ${cat.spec}` : `${cat.id} — not installed · click to pull`}
                       className="flex flex-col items-center font-mono text-[0.42rem] tracking-widest px-1.5 py-0.5 border transition-all max-w-[76px]"
                       style={{
-                        color:       active ? (cat?.color ?? 'var(--color-primary)') : 'var(--text-ghost)',
-                        borderColor: active ? (cat?.color ?? 'var(--border-accent)') : 'var(--border-base)',
-                        background:  active ? `${cat?.color ?? '#00d4ff'}12` : 'transparent',
+                        color:       active ? cat.color : installed ? 'var(--text-dim)' : 'var(--text-ghost)',
+                        borderColor: active ? cat.color : installed ? 'var(--border-base)' : 'var(--border-base)',
+                        background:  active ? `${cat.color}12` : 'transparent',
+                        opacity:     installed ? 1 : 0.45,
                       }}
                     >
-                      <span className="truncate w-full text-center">{cat?.name ?? m.split(':')[0]}</span>
-                      {cat && <span className="text-[0.34rem] opacity-60 tracking-normal truncate w-full text-center">{cat.spec}</span>}
+                      <span className="truncate w-full text-center">{cat.name}</span>
+                      <span className="text-[0.34rem] tracking-normal truncate w-full text-center" style={{ opacity: 0.7 }}>
+                        {installed ? cat.spec : '↓ pull'}
+                      </span>
                     </button>
                   )
                 })}
