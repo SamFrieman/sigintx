@@ -15,13 +15,15 @@
  *   - Detail panel → shows full metadata, connected neighbours, and a verify button
  */
 
-import {
+import React, {
   useState, useCallback, useEffect, useRef, useMemo,
 } from 'react'
 import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  Handle,
+  Position,
   useNodesState,
   useEdgesState,
   MarkerType,
@@ -32,7 +34,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import {
   GitFork, RefreshCw, CheckCircle, AlertTriangle,
-  Shield, Newspaper, Target, Zap, X, Info, Lock,
+  Shield, Newspaper, Target, Zap, X, Info,
 } from 'lucide-react'
 import { sevColor } from '@/lib/utils'
 import { fetchJson } from '@/hooks/useApi'
@@ -93,10 +95,15 @@ const NODE_CONFIG: Record<string, {
 }
 
 const EDGE_STYLE: Record<string, { stroke: string; strokeWidth: number }> = {
-  linked_to:      { stroke: 'rgba(200,200,255,0.55)', strokeWidth: 1.5 },
-  uses_technique: { stroke: 'rgba(0,255,136,0.70)',   strokeWidth: 2.0 },
-  targets:        { stroke: 'rgba(255,68,68,0.70)',   strokeWidth: 2.0 },
-  mentioned_in:   { stroke: 'rgba(0,212,255,0.55)',   strokeWidth: 1.5 },
+  linked_to:      { stroke: 'rgba(180,180,255,0.75)', strokeWidth: 2.0 },
+  uses_technique: { stroke: 'rgba(0,255,136,0.85)',   strokeWidth: 2.5 },
+  targets:        { stroke: 'rgba(255,68,68,0.85)',   strokeWidth: 2.5 },
+  mentioned_in:   { stroke: 'rgba(0,212,255,0.75)',   strokeWidth: 2.0 },
+}
+
+// Invisible handle style — gives React Flow proper anchor points without cluttering the UI
+const HANDLE_STYLE: React.CSSProperties = {
+  width: 6, height: 6, background: 'transparent', border: 'none',
 }
 
 // ── Layout: gravity-based hierarchical ───────────────────────────────────────
@@ -200,6 +207,12 @@ function CorrelationNode({ data }: NodeProps) {
         filter:     data.dimmed ? 'grayscale(0.6)' : 'none',
       }}
     >
+      {/* Invisible handles give React Flow proper anchor points for edge routing */}
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
+      <Handle type="target" position={Position.Left}   style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Right}  style={HANDLE_STYLE} />
+
       {/* Type bar */}
       <div
         className="flex items-center gap-1 px-2 py-1 border-b"
@@ -225,9 +238,7 @@ function CorrelationNode({ data }: NodeProps) {
           )}
           {data.verified
             ? <CheckCircle size={9} style={{ color: 'var(--color-success)' }} />
-            : data.ai_generated
-              ? <AlertTriangle size={8} style={{ color: 'rgba(255,170,0,0.7)' }} />
-              : <Lock size={8} style={{ color: 'var(--text-ghost)' }} />}
+            : <AlertTriangle size={8} style={{ color: 'rgba(255,170,0,0.7)' }} />}
         </div>
       </div>
 
@@ -579,15 +590,14 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
         source:       e.source,
         target:       e.target,
         label:        e.label || undefined,
-        labelStyle:   { fill: 'rgba(180,200,220,0.75)', fontFamily: 'monospace', fontSize: 8 },
+        labelStyle:   { fill: 'rgba(200,220,240,0.85)', fontFamily: 'monospace', fontSize: 9 },
         labelBgStyle: { fill: 'rgba(6,13,24,0.88)', fillOpacity: 1 },
         style: {
-          stroke:          isVer ? es.stroke.replace(/[\d.]+\)$/, '0.95)') : es.stroke,
-          strokeWidth:     sw,
-          strokeDasharray: e.verified ? undefined : '5 3',
-          filter:          isVer ? `drop-shadow(0 0 3px ${es.stroke})` : undefined,
+          stroke:      es.stroke,
+          strokeWidth: sw,
+          filter:      `drop-shadow(0 0 2px ${es.stroke})`,
         },
-        markerEnd: { type: MarkerType.ArrowClosed, color: es.stroke, width: 13, height: 13 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: es.stroke, width: 14, height: 14 },
         animated:  e.type === 'uses_technique' || e.type === 'targets',
         type:      'smoothstep',
         data:      { baseAnimated: e.type === 'uses_technique' || e.type === 'targets' },
@@ -831,16 +841,6 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
                 <span className="font-mono text-[0.42rem] tracking-widest text-[var(--text-dim)]">{cfg.label}</span>
               </div>
             ))}
-            <div className="pt-1 border-t border-[var(--border-base)] space-y-0.5 mt-0.5">
-              <div className="flex items-center gap-1.5">
-                <CheckCircle size={8} className="text-[var(--color-success)]" />
-                <span className="font-mono text-[0.4rem] text-[var(--text-ghost)]">DB VERIFIED</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <AlertTriangle size={8} style={{ color: 'rgba(255,170,0,0.7)' }} />
-                <span className="font-mono text-[0.4rem] text-[var(--text-ghost)]">AI ENRICHED</span>
-              </div>
-            </div>
           </div>
         )}
       </div>

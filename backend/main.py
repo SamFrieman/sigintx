@@ -920,16 +920,16 @@ async def _build_ai_correlation(hours_back: int, db: AsyncSession, model_overrid
         .where(NewsItem.published_at >= cutoff)
         .where(NewsItem.severity.in_(["CRITICAL", "HIGH"]))
         .order_by(desc(NewsItem.published_at))
-        .limit(25)
+        .limit(40)
     )).all()
 
     # Broaden to MEDIUM if we have very few high-sev items
-    if len(news_rows) < 5:
+    if len(news_rows) < 8:
         news_rows = (await db.scalars(
             select(NewsItem)
             .where(NewsItem.published_at >= cutoff)
             .order_by(desc(NewsItem.published_at))
-            .limit(20)
+            .limit(35)
         )).all()
 
     actor_rows = (await db.scalars(
@@ -1120,18 +1120,18 @@ async def _build_ai_correlation(hours_back: int, db: AsyncSession, model_overrid
     provider = "deterministic"
 
     if len(nodes) >= 4:
-        node_id_list = json.dumps(sorted(nodes.keys())[:25])
+        node_id_list = json.dumps(sorted(nodes.keys())[:40])
         news_ctx = "\n".join(
-            f"  news_{n.id}: [{n.severity}] {n.title[:65]}"
-            for n in news_rows[:12]
+            f"  news_{n.id}: [{n.severity}] {n.title[:70]}"
+            for n in news_rows[:20]
         )
         actor_ctx = "\n".join(
             f"  {nid}: {nodes[nid]['label']} ({nodes[nid].get('country') or 'unknown'})"
-            for nid in list(actor_node_ids.values())[:10]
+            for nid in list(actor_node_ids.values())[:15]
             if nid in nodes
         )
-        ai_prompt = f"""You are a threat intelligence analyst. Identify 2-3 CAMPAIGN nodes that
-group existing actor/news nodes into coordinated operations.
+        ai_prompt = f"""You are a threat intelligence analyst. Identify 4-6 CAMPAIGN nodes that
+group existing actor/news nodes into coordinated threat operations.
 
 EXISTING CONFIRMED NODE IDs — use these EXACTLY in links.node_id:
 {node_id_list}
@@ -1143,9 +1143,14 @@ CONFIRMED ACTORS:
 {actor_ctx}
 
 Return ONLY valid JSON, no markdown fences:
-{{"campaigns":[{{"id":"campaign_snake_id","label":"Name max 35 chars","description":"2 sentences.","country":"string or null","confidence":75,"target_sectors":["sector"],"links":[{{"node_id":"EXACT_ID","edge_type":"linked_to","label":"short"}}]}}]}}
+{{"campaigns":[{{"id":"campaign_snake_id","label":"Name max 35 chars","description":"2 sentences.","country":"string or null","confidence":75,"target_sectors":["sector"],"links":[{{"node_id":"EXACT_ID","edge_type":"linked_to|targets|mentioned_in","label":"short"}}]}}]}}
 
-Rules: id MUST start with 'campaign_'. node_id MUST be from the list above verbatim."""
+Rules:
+- id MUST start with 'campaign_'
+- node_id MUST be verbatim from the list above
+- Each campaign MUST link to 5-15 nodes from the list
+- Use all or most of the provided node IDs across campaigns
+- Different campaigns may share some nodes (overlapping operations are realistic)"""
 
         messages = [
             {"role": "system", "content": "Output ONLY valid JSON. No markdown."},
@@ -1154,8 +1159,8 @@ Rules: id MUST start with 'campaign_'. node_id MUST be from the list above verba
         from llm import call_llm
         try:
             text, prov = await call_llm(
-                messages, db, temperature=0.05, max_tokens=1200,
-                timeout_s=120.0, json_mode=True, model_override=model_override,
+                messages, db, temperature=0.05, max_tokens=2500,
+                timeout_s=150.0, json_mode=True, model_override=model_override,
             )
             provider = prov or "deterministic"
 
@@ -1167,7 +1172,7 @@ Rules: id MUST start with 'campaign_'. node_id MUST be from the list above verba
                 try:
                     ai_data = json.loads(clean)
                 except Exception:
-                    m = _re.search(r"\{[\s\S]+\}", clean[:12_000])
+                    m = _re.search(r"\{[\s\S]+\}", clean[:16_000])
                     if m:
                         try:
                             ai_data = json.loads(m.group())
@@ -1175,7 +1180,7 @@ Rules: id MUST start with 'campaign_'. node_id MUST be from the list above verba
                             pass
 
                 if ai_data and isinstance(ai_data.get("campaigns"), list):
-                    for camp in ai_data["campaigns"][:3]:
+                    for camp in ai_data["campaigns"][:6]:
                         cid = safe_id(str(camp.get("id", "")))
                         if not cid or not camp.get("label"):
                             continue
@@ -1199,7 +1204,7 @@ Rules: id MUST start with 'campaign_'. node_id MUST be from the list above verba
                             "target_sectors": _str_list(camp.get("target_sectors", []), maxlen=4, itemlen=30),
                             "sources":        [],
                         })
-                        for link in (camp.get("links") or [])[:8]:
+                        for link in (camp.get("links") or [])[:20]:
                             ln_id = str(link.get("node_id", "")).strip()
                             if ln_id in nodes:
                                 etype = str(link.get("edge_type", "linked_to"))
