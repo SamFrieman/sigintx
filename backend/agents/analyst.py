@@ -142,18 +142,27 @@ async def stream_ollama(
     model: str | None = None,               # optional override; provider chain picks default
     # Legacy params kept for call-site compatibility — ignored when db is an AsyncSession
     ollama_host: str | None = None,
+    history: list[dict] | None = None,      # prior {role, content} turns for memory
 ) -> AsyncIterator[str]:
     """
     Stream an AI response with injected live threat context.
     Routes through the multi-provider chain (Ollama → Groq → OpenRouter → Generic).
     Yields SSE: ``data: {"text": "...", "done": bool}\n\n``
+
+    history — list of prior {"role": "user"|"assistant", "content": str} dicts in
+    chronological order. Capped to last 20 messages to stay within context windows.
     """
     from llm import stream_llm
 
     context_block = _format_context_prompt(context)
+    # Inject fresh live context into the system prompt so every turn sees current data
+    system_content = f"{SYSTEM_PROMPT}\n\n{context_block}"
+    # Prior conversation turns (capped to keep context window manageable)
+    prior_turns = (history or [])[-20:]
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user",   "content": f"{context_block}\n\nUser question: {user_message}"},
+        {"role": "system", "content": system_content},
+        *prior_turns,
+        {"role": "user", "content": user_message},
     ]
     async for chunk in stream_llm(messages, db, model_override=model, timeout_s=120.0):
         yield chunk

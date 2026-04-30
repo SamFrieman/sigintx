@@ -3,11 +3,65 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Bot, Send, Square, RefreshCw, Zap, Search,
   Users, AlertTriangle, FileText, ChevronDown, ChevronUp as ChevronUpIcon, Clock,
-  Cpu, Activity, TrendingUp, TrendingDown, Trash2, Wrench,
+  Cpu, Activity, TrendingUp, TrendingDown, Trash2, Wrench, Download,
+  CheckCircle2, Database, Brain,
 } from 'lucide-react'
 import type { AiBriefing, AiStatus, ChatMessage, AgentStep, SeverityLevel } from '@/types'
 import { timeAgo } from '@/lib/utils'
 import { useApi, API_BASE } from '@/hooks/useApi'
+// ── Curated lightweight model catalog ────────────────────────────────────────
+interface CatalogModel {
+  id:    string
+  name:  string
+  spec:  string   // specialization label
+  size:  string   // approximate download size
+  color: string
+  systemHint: string  // injected into system prompt when this model is active
+}
+
+const MODEL_CATALOG: CatalogModel[] = [
+  {
+    id:         'llama3.2:3b',
+    name:       'Llama 3.2',
+    spec:       'General Analyst',
+    size:       '2.0 GB',
+    color:      '#00d4ff',
+    systemHint: 'You are a general-purpose threat intelligence analyst.',
+  },
+  {
+    id:         'phi4-mini',
+    name:       'Phi-4 Mini',
+    spec:       'CVE & Code',
+    size:       '2.5 GB',
+    color:      '#a855f7',
+    systemHint: 'You specialise in CVE analysis, exploit code review, and vulnerability triage.',
+  },
+  {
+    id:         'qwen2.5:3b',
+    name:       'Qwen 2.5',
+    spec:       'OSINT & Geopolitics',
+    size:       '1.9 GB',
+    color:      '#f7931a',
+    systemHint: 'You specialise in geopolitical OSINT, nation-state actor attribution, and multilingual threat analysis.',
+  },
+  {
+    id:         'deepseek-r1:1.5b',
+    name:       'DeepSeek R1',
+    spec:       'Deep Reasoning',
+    size:       '1.1 GB',
+    color:      '#00cc88',
+    systemHint: 'You use step-by-step chain-of-thought reasoning to analyse complex threat scenarios.',
+  },
+  {
+    id:         'mistral:7b',
+    name:       'Mistral 7B',
+    spec:       'Threat Hunting',
+    size:       '4.1 GB',
+    color:      '#ff6644',
+    systemHint: 'You specialise in proactive threat hunting, TTP analysis, and detection rule authoring.',
+  },
+]
+
 const QUICK_PROMPTS = [
   { icon: AlertTriangle, label: 'Critical Threats',   prompt: 'What are the most critical active threats right now? Give me specific CVEs, actors, and immediate actions.' },
   { icon: Users,         label: 'Active Actors',      prompt: 'Which threat actors are most active in the past 24 hours? Summarize their campaigns, TTPs, and targets.' },
@@ -520,7 +574,9 @@ export function AiAnalyst({ refreshTrigger }: Props) {
   const [briefingContent, setBriefingContent] = useState<string | null>(null)
   const [briefingStreaming, setBriefingStreaming] = useState(false)
   const [showBriefing, setShowBriefing] = useState(false)
-  const [activePanel, setActivePanel]   = useState<'chat' | 'briefing' | 'delta'>('chat')
+  const [activePanel, setActivePanel]   = useState<'chat' | 'briefing' | 'delta' | 'models'>('chat')
+  const [pullProgress, setPullProgress] = useState<Record<string, { pct: number; status: string }>>({})
+  const [pullingModel, setPullingModel] = useState<string | null>(null)
   const [clearingHistory, setClearingHistory] = useState(false)
   const [agentMode, setAgentMode]       = useState(false)
 
@@ -648,7 +704,8 @@ export function AiAnalyst({ refreshTrigger }: Props) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          message: msg,
+          message:    msg,
+          session_id: sessionId.current,
           ...(selectedModel ? { model: selectedModel } : {}),
         }),
         signal:  abortRef.current.signal,
@@ -783,6 +840,45 @@ export function AiAnalyst({ refreshTrigger }: Props) {
     setBriefingLoading(false)
   }
 
+  /** Pull a model from Ollama registry with live progress */
+  const pullModel = useCallback(async (modelId: string) => {
+    if (pullingModel) return
+    setPullingModel(modelId)
+    setPullProgress(p => ({ ...p, [modelId]: { pct: 0, status: 'Starting…' } }))
+    try {
+      const resp = await fetch(`${API_BASE}/ollama/pull`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ model: modelId }),
+      })
+      if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`)
+      const reader  = resp.body.getReader()
+      const decoder = new TextDecoder()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const raw = decoder.decode(value, { stream: true })
+        for (const line of raw.split('\n')) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.error) {
+              setPullProgress(p => ({ ...p, [modelId]: { pct: 0, status: `Error: ${ev.status}` } }))
+              break
+            }
+            const pct = ev.total ? Math.round((ev.completed / ev.total) * 100) : (ev.done ? 100 : 0)
+            setPullProgress(p => ({ ...p, [modelId]: { pct, status: ev.status ?? '' } }))
+            if (ev.done) { loadStatus(); break }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (e) {
+      setPullProgress(p => ({ ...p, [modelId]: { pct: 0, status: `Failed: ${(e as Error).message}` } }))
+    } finally {
+      setPullingModel(null)
+    }
+  }, [pullingModel, loadStatus])
+
   const clearHistory = async () => {
     setClearingHistory(true)
     try {
@@ -898,30 +994,36 @@ export function AiAnalyst({ refreshTrigger }: Props) {
                 <button
                   onClick={() => setSelectedModel('')}
                   title="Use default model (set in Settings → Ollama Model)"
-                  className="font-mono text-[0.42rem] tracking-widest px-1.5 py-0.5 border transition-all"
+                  className="flex flex-col items-center font-mono text-[0.42rem] tracking-widest px-1.5 py-0.5 border transition-all"
                   style={{
                     color:       selectedModel === '' ? 'var(--color-primary)' : 'var(--text-ghost)',
                     borderColor: selectedModel === '' ? 'var(--border-accent)' : 'var(--border-base)',
                     background:  selectedModel === '' ? 'rgba(0,212,255,0.07)' : 'transparent',
                   }}
                 >
-                  AUTO
+                  <span>AUTO</span>
+                  <span className="text-[0.36rem] opacity-60 tracking-normal">default</span>
                 </button>
-                {availableModels.map(m => (
-                  <button
-                    key={m}
-                    onClick={() => setSelectedModel(m)}
-                    title={m}
-                    className="font-mono text-[0.42rem] tracking-widest px-1.5 py-0.5 border transition-all max-w-[72px] truncate"
-                    style={{
-                      color:       selectedModel === m ? 'var(--color-primary)' : 'var(--text-ghost)',
-                      borderColor: selectedModel === m ? 'var(--border-accent)' : 'var(--border-base)',
-                      background:  selectedModel === m ? 'rgba(0,212,255,0.07)' : 'transparent',
-                    }}
-                  >
-                    {m.split(':')[0]}
-                  </button>
-                ))}
+                {availableModels.map(m => {
+                  const cat = MODEL_CATALOG.find(c => c.id === m || m.startsWith(c.id.split(':')[0]))
+                  const active = selectedModel === m
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => setSelectedModel(m)}
+                      title={`${m}${cat ? ` — ${cat.spec}` : ''}`}
+                      className="flex flex-col items-center font-mono text-[0.42rem] tracking-widest px-1.5 py-0.5 border transition-all max-w-[76px]"
+                      style={{
+                        color:       active ? (cat?.color ?? 'var(--color-primary)') : 'var(--text-ghost)',
+                        borderColor: active ? (cat?.color ?? 'var(--border-accent)') : 'var(--border-base)',
+                        background:  active ? `${cat?.color ?? '#00d4ff'}12` : 'transparent',
+                      }}
+                    >
+                      <span className="truncate w-full text-center">{cat?.name ?? m.split(':')[0]}</span>
+                      {cat && <span className="text-[0.34rem] opacity-60 tracking-normal truncate w-full text-center">{cat.spec}</span>}
+                    </button>
+                  )
+                })}
               </div>
             )}
             {/* Agent mode toggle */}
@@ -1230,10 +1332,11 @@ export function AiAnalyst({ refreshTrigger }: Props) {
         <div className="panel shrink-0">
           <div className="flex">
             {([
-              { id: 'chat',     label: 'CONTEXT'  },
-              { id: 'briefing', label: 'BRIEFS'   },
-              { id: 'delta',    label: 'DELTA', icon: TrendingUp },
-            ] as { id: 'chat' | 'briefing' | 'delta'; label: string; icon?: typeof TrendingUp }[]).map(p => (
+              { id: 'chat',     label: 'CONTEXT',  icon: Activity   },
+              { id: 'briefing', label: 'BRIEFS',   icon: FileText   },
+              { id: 'delta',    label: 'DELTA',    icon: TrendingUp },
+              { id: 'models',   label: 'MODELS',   icon: Brain      },
+            ] as { id: 'chat' | 'briefing' | 'delta' | 'models'; label: string; icon: typeof Activity }[]).map(p => (
               <button
                 key={p.id}
                 onClick={() => setActivePanel(p.id)}
@@ -1244,7 +1347,7 @@ export function AiAnalyst({ refreshTrigger }: Props) {
                   borderBottom: activePanel === p.id ? '1px solid var(--color-primary)' : '1px solid transparent',
                 }}
               >
-                {p.icon && <p.icon size={8} />}
+                <p.icon size={8} />
                 {p.label}
               </button>
             ))}
@@ -1453,6 +1556,120 @@ export function AiAnalyst({ refreshTrigger }: Props) {
                   )}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Models panel */}
+        {activePanel === 'models' && (
+          <div className="panel flex-1 flex flex-col min-h-0">
+            <div className="panel-header shrink-0">
+              <div className="flex items-center gap-1.5">
+                <Brain size={11} className="text-[var(--color-primary)]" />
+                <span className="panel-title">MODEL CATALOG</span>
+              </div>
+              <span className="font-mono text-[0.44rem] text-[var(--text-ghost)] tracking-widest">
+                {availableModels.length} INSTALLED
+              </span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-1.5">
+              {MODEL_CATALOG.map(cat => {
+                const isInstalled = availableModels.some(m => m === cat.id || m.startsWith(cat.id.split(':')[0]))
+                const prog        = pullProgress[cat.id]
+                const isPulling   = pullingModel === cat.id
+
+                return (
+                  <div
+                    key={cat.id}
+                    className="border p-2.5 space-y-1.5 transition-all"
+                    style={{
+                      borderColor: isInstalled ? `${cat.color}40` : 'var(--border-base)',
+                      background:  isInstalled ? `${cat.color}08` : 'transparent',
+                    }}
+                  >
+                    {/* Model header row */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[0.56rem] font-semibold" style={{ color: cat.color }}>
+                            {cat.name}
+                          </span>
+                          {isInstalled && (
+                            <CheckCircle2 size={9} style={{ color: cat.color }} />
+                          )}
+                        </div>
+                        <div className="font-mono text-[0.45rem] tracking-widest mt-0.5" style={{ color: cat.color, opacity: 0.75 }}>
+                          {cat.spec}
+                        </div>
+                        <div className="font-mono text-[0.42rem] text-[var(--text-ghost)] mt-0.5">
+                          {cat.id} · {cat.size}
+                        </div>
+                      </div>
+
+                      {/* Action button */}
+                      {isInstalled ? (
+                        <button
+                          onClick={() => { setSelectedModel(cat.id); setActivePanel('chat') }}
+                          className="shrink-0 font-mono text-[0.42rem] tracking-widest px-2 py-1 border transition-all"
+                          style={{
+                            color:       cat.color,
+                            borderColor: `${cat.color}60`,
+                            background:  `${cat.color}10`,
+                          }}
+                        >
+                          USE
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => pullModel(cat.id)}
+                          disabled={!!pullingModel}
+                          className="shrink-0 flex items-center gap-1 font-mono text-[0.42rem] tracking-widest px-2 py-1 border border-[var(--border-base)] text-[var(--text-dim)] hover:text-[var(--color-primary)] hover:border-[var(--border-accent)] transition-all disabled:opacity-40"
+                        >
+                          <Download size={8} />
+                          PULL
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Pull progress bar */}
+                    {(isPulling || (prog && prog.pct > 0 && prog.pct < 100)) && (
+                      <div className="space-y-0.5">
+                        <div className="h-0.5 bg-[var(--bg-elevated)] rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-300"
+                            style={{ width: `${prog?.pct ?? 0}%`, background: cat.color }}
+                          />
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-mono text-[0.38rem] text-[var(--text-ghost)] truncate flex-1">
+                            {prog?.status ?? 'Connecting…'}
+                          </span>
+                          <span className="font-mono text-[0.38rem] shrink-0 ml-1" style={{ color: cat.color }}>
+                            {prog?.pct ?? 0}%
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {prog?.pct === 100 && !isPulling && (
+                      <div className="font-mono text-[0.4rem] tracking-widest" style={{ color: cat.color }}>
+                        ✓ INSTALLED — model ready
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              <div className="border border-[var(--border-base)] p-2.5 mt-1">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Database size={9} className="text-[var(--text-ghost)]" />
+                  <span className="font-mono text-[0.44rem] text-[var(--text-ghost)] tracking-widest">MEMORY</span>
+                </div>
+                <p className="text-[0.68rem] text-[var(--text-muted)] leading-relaxed">
+                  Chat history is persisted per session. The active model references the last 20 messages
+                  as context. Use the trash icon to reset memory.
+                </p>
+              </div>
             </div>
           </div>
         )}

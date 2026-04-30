@@ -1604,9 +1604,10 @@ Produce 3-7 distinct hidden campaigns. Only include well-supported patterns with
 # ── AI Analyst (v2.0.0) ──────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
-    model: Optional[str] = None   # None → provider chain picks default
-    hours_back: int = Field(default=24, ge=1, le=72)
+    message:    str          = Field(min_length=1, max_length=4000)
+    session_id: str          = Field(default='', max_length=128)   # for memory
+    model:      Optional[str] = None   # None → provider chain picks default
+    hours_back: int           = Field(default=24, ge=1, le=72)
 
 
 class BriefingRequest(BaseModel):
@@ -1662,7 +1663,7 @@ async def ai_status(db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/v1/ai/chat")
 async def ai_chat(req: ChatRequest, db: AsyncSession = Depends(get_db)):
-    """Stream a chat response from the AI analyst with injected live threat context."""
+    """Stream a chat response from the AI analyst with injected live threat context and chat memory."""
     if not _validate_model(req.model):
         raise HTTPException(400, f"Invalid model name: {req.model!r}")
     if not req.message.strip():
@@ -1670,8 +1671,20 @@ async def ai_chat(req: ChatRequest, db: AsyncSession = Depends(get_db)):
 
     ctx = await build_threat_context(db, hours_back=max(1, min(req.hours_back, 72)))
 
+    # Load recent history for this session so the model can reference prior turns
+    history: list[dict] = []
+    sid = req.session_id.strip()
+    if sid:
+        hist_rows = (await db.scalars(
+            select(AiChatMessage)
+            .where(AiChatMessage.session_id == sid)
+            .order_by(AiChatMessage.created_at.desc())
+            .limit(20)
+        )).all()
+        history = [{"role": r.role, "content": r.content} for r in reversed(hist_rows)]
+
     async def event_stream():
-        async for chunk in stream_ollama(req.message, ctx, db, model=req.model):
+        async for chunk in stream_ollama(req.message, ctx, db, model=req.model, history=history):
             yield chunk
 
     return StreamingResponse(
