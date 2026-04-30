@@ -597,10 +597,10 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
           strokeWidth: sw,
           filter:      `drop-shadow(0 0 2px ${es.stroke})`,
         },
-        markerEnd: { type: MarkerType.ArrowClosed, color: es.stroke, width: 14, height: 14 },
-        animated:  e.type === 'uses_technique' || e.type === 'targets',
+        markerEnd: { type: MarkerType.ArrowClosed, color: es.stroke, width: 8, height: 8 },
+        animated:  false,
         type:      'smoothstep',
-        data:      { baseAnimated: e.type === 'uses_technique' || e.type === 'targets' },
+        data:      { baseAnimated: false },
       }
     })
     setEdges(rfEdges)
@@ -615,7 +615,7 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
       setEdges(prev => prev.map(e => ({
         ...e,
         style:    { ...e.style, opacity: 1 },
-        animated: e.data?.baseAnimated ?? false,
+        animated: false,
       })))
       return
     }
@@ -639,7 +639,7 @@ export function CorrelationGraph({ refreshTrigger }: Props) {
           opacity:     connected ? 1 : 0.08,
           strokeWidth: connected ? ((Number(e.style?.strokeWidth) || 1.5) * 2) : e.style?.strokeWidth,
         },
-        animated: connected,
+        animated: false,
       }
     }))
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
