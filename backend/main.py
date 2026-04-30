@@ -900,195 +900,333 @@ async def get_ai_correlation(
 
 
 async def _build_ai_correlation(hours_back: int, db: AsyncSession, model_override: Optional[str] = None) -> dict:
-    """Heavy lifting for the AI correlation graph — called once per unique request."""
-    from time import monotonic
-    from datetime import timedelta
+    """
+    Build a threat correlation graph in two phases:
+      1. Deterministic pass — extracts real relationships from the DB
+         (news ↔ actors, actors ↔ techniques, news ↔ CVEs).  Every node and
+         edge produced here is verified and never depends on the LLM.
+      2. AI enrichment — asks the LLM to add 2-3 campaign nodes that group
+         related actors/news into coordinated operations.  If the LLM fails
+         or times out the deterministic graph is returned unchanged.
+    """
     import re as _re
+    from datetime import timedelta
 
     cutoff = datetime.utcnow() - timedelta(hours=hours_back)
 
+    # ── Fetch from every available DB resource ────────────────────────────────
     news_rows = (await db.scalars(
         select(NewsItem)
         .where(NewsItem.published_at >= cutoff)
         .where(NewsItem.severity.in_(["CRITICAL", "HIGH"]))
         .order_by(desc(NewsItem.published_at))
-        .limit(30)
+        .limit(25)
     )).all()
+
+    # Broaden to MEDIUM if we have very few high-sev items
+    if len(news_rows) < 5:
+        news_rows = (await db.scalars(
+            select(NewsItem)
+            .where(NewsItem.published_at >= cutoff)
+            .order_by(desc(NewsItem.published_at))
+            .limit(20)
+        )).all()
 
     actor_rows = (await db.scalars(
-        select(ThreatActor).order_by(ThreatActor.last_activity.desc().nullslast()).limit(20)
+        select(ThreatActor)
+        .order_by(ThreatActor.last_activity.desc().nullslast())
+        .limit(40)
     )).all()
 
-    news_ctx = "\n".join(
-        f"- [id:{n.id}][{n.severity}] {n.title[:120]} "
-        f"(actors: {', '.join(json.loads(n.threat_actors) if n.threat_actors else []) or 'unknown'})"
-        for n in news_rows
-    ) or "No recent high-severity news."
+    # Build actor lookup: name + all aliases → ThreatActor (case-insensitive)
+    actor_lookup: dict[str, "ThreatActor"] = {}
+    for a in actor_rows:
+        actor_lookup[a.name.lower()] = a
+        for alias in (json.loads(a.aliases) if a.aliases else []):
+            actor_lookup[alias.strip().lower()] = a
 
-    actors_ctx = "\n".join(
-        f"- [id:{a.name.lower().replace(' ','_')}] {a.name} ({a.country or 'unknown'}) | "
-        + "techniques: " + ", ".join((json.loads(a.techniques) if a.techniques else [])[:5])
-        for a in actor_rows
-    ) or "No actors in database."
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def safe_id(s: str) -> str:
+        s = s.lower().strip()
+        s = _re.sub(r"[^a-z0-9_]", "_", s)
+        s = _re.sub(r"_+", "_", s)
+        return s[:48].strip("_") or "node"
 
-    prompt = f"""\
-You are a threat intelligence analyst. Analyse the news and actors below and produce a JSON correlation graph.
+    def _str_list(v: object, maxlen: int = 6, itemlen: int = 80) -> list:
+        if not isinstance(v, list):
+            return []
+        return [str(x)[:itemlen] for x in v[:maxlen] if x]
 
-=== RECENT HIGH/CRITICAL NEWS (last {hours_back}h) ===
+    nodes: dict[str, dict] = {}     # id → node dict
+    edge_list: list[dict] = []
+    seen_pairs: set[tuple] = set()
+
+    def upsert_node(nd: dict) -> None:
+        nodes[nd["id"]] = nd
+
+    def add_edge(src: str, tgt: str, etype: str, label: str = "",
+                 strength: int = 70, verified: bool = True, ai_gen: bool = False) -> bool:
+        if src not in nodes or tgt not in nodes or src == tgt:
+            return False
+        pair = (src, tgt)
+        if pair in seen_pairs or (tgt, src) in seen_pairs:
+            return False
+        seen_pairs.add(pair)
+        edge_list.append({
+            "id":           f"e_{safe_id(src)}_{safe_id(tgt)}"[:64],
+            "source":       src,
+            "target":       tgt,
+            "label":        label[:25],
+            "type":         etype,
+            "strength":     max(0, min(100, strength)),
+            "verified":     verified,
+            "ai_generated": ai_gen,
+        })
+        return True
+
+    # ── Phase 1: Actor nodes (DB-backed) ──────────────────────────────────────
+    # Collect actors mentioned in recent news first
+    mentioned: dict[str, set] = {}   # actor_name_lower → {news_id, ...}
+    for n in news_rows:
+        for aname in (json.loads(n.threat_actors) if n.threat_actors else []):
+            key = aname.strip().lower()
+            if key:
+                mentioned.setdefault(key, set()).add(n.id)
+
+    actor_node_ids: dict[str, str] = {}   # actor_name_lower → node_id
+
+    for aname_lower, news_ids in mentioned.items():
+        dba = actor_lookup.get(aname_lower)
+        if dba:
+            nid = safe_id(dba.name)
+            techs   = _str_list(json.loads(dba.techniques) if dba.techniques else [], maxlen=6)
+            aliases = _str_list(json.loads(dba.aliases)    if dba.aliases    else [], maxlen=3)
+            last_s  = dba.last_activity.strftime("%Y-%m") if dba.last_activity else None
+            desc    = (dba.description or "")[:300] or f"Threat actor active in {len(news_ids)} recent reports."
+            conf    = 95
+            country = dba.country
+            verified = True
+        else:
+            # Actor not in DB — create a skeleton node
+            display = aname_lower.title()
+            nid     = safe_id(display)
+            techs   = []
+            aliases = []
+            last_s  = None
+            desc    = f"Threat actor referenced in {len(news_ids)} recent intelligence items."
+            conf    = 60
+            country = None
+            verified = False
+
+        actor_node_ids[aname_lower] = nid
+        upsert_node({
+            "id":             nid,
+            "type":           "actor",
+            "label":          (dba.name if dba else aname_lower.title())[:40],
+            "description":    desc,
+            "severity":       "HIGH",
+            "verified":       verified,
+            "ai_generated":   False,
+            "confidence":     conf,
+            "country":        country,
+            "last_seen":      last_s,
+            "iocs":           [],
+            "techniques":     techs,
+            "target_sectors": [],
+            "sources":        aliases,
+        })
+
+    # ── Phase 2: Technique nodes (actors that share ≥1 technique) ─────────────
+    tech_actors: dict[str, list] = {}   # tech_id → [actor_node_id, ...]
+    for aname_lower, actor_nid in actor_node_ids.items():
+        dba = actor_lookup.get(aname_lower)
+        if not dba:
+            continue
+        for tech in (json.loads(dba.techniques) if dba.techniques else [])[:5]:
+            tid = safe_id(f"tech_{tech}")
+            tech_actors.setdefault(tid, [])
+            if actor_nid not in tech_actors[tid]:
+                tech_actors[tid].append(actor_nid)
+
+    # Threshold: add technique node if used by ≥2 actors, or ≥1 when actors are few
+    min_actors = 2 if len(actor_node_ids) >= 4 else 1
+    for tid, actor_nids in tech_actors.items():
+        if len(actor_nids) < min_actors:
+            continue
+        tech_name = tid.replace("tech_", "").replace("_", " ").title()[:40]
+        upsert_node({
+            "id":             tid,
+            "type":           "technique",
+            "label":          tech_name,
+            "description":    f"Attack technique leveraged by: {', '.join(actor_nids[:3])}.",
+            "severity":       None,
+            "verified":       True,
+            "ai_generated":   False,
+            "confidence":     90,
+            "country":        None,
+            "last_seen":      None,
+            "iocs":           [],
+            "techniques":     [],
+            "target_sectors": [],
+            "sources":        [],
+        })
+        for anid in actor_nids:
+            add_edge(anid, tid, "uses_technique", "uses", 80)
+
+    # ── Phase 3: News nodes + actor edges ─────────────────────────────────────
+    for n in news_rows:
+        nid = f"news_{n.id}"
+        cve_refs_raw = _str_list(json.loads(n.cve_refs) if n.cve_refs else [], maxlen=5, itemlen=20)
+        tags_raw     = _str_list(json.loads(n.tags)     if n.tags     else [], maxlen=6, itemlen=40)
+        upsert_node({
+            "id":             nid,
+            "type":           "news",
+            "label":          n.title[:40] + ("…" if len(n.title) > 40 else ""),
+            "description":    (n.summary or n.title)[:300],
+            "severity":       n.severity,
+            "verified":       True,
+            "ai_generated":   False,
+            "confidence":     100,
+            "country":        None,
+            "last_seen":      n.published_at.strftime("%Y-%m") if n.published_at else None,
+            "iocs":           cve_refs_raw,
+            "techniques":     [],
+            "target_sectors": tags_raw,
+            "sources":        [n.source] if n.source else [],
+        })
+        # Edges: actor → news  (bidirectional discovery, directed edge reads "actor reported in news")
+        for aname in (json.loads(n.threat_actors) if n.threat_actors else []):
+            actor_nid = actor_node_ids.get(aname.strip().lower())
+            if actor_nid:
+                add_edge(actor_nid, nid, "mentioned_in", "reported in", 80)
+
+    # ── Phase 4: Cross-actor edges (actors that co-appear in ≥2 news items) ────
+    actor_news_sets: dict[str, set] = {}   # actor_node_id → {news_id, ...}
+    for n in news_rows:
+        for aname in (json.loads(n.threat_actors) if n.threat_actors else []):
+            anid = actor_node_ids.get(aname.strip().lower())
+            if anid:
+                actor_news_sets.setdefault(anid, set()).add(n.id)
+
+    actor_ids_list = list(actor_news_sets.keys())
+    for i in range(len(actor_ids_list)):
+        for j in range(i + 1, len(actor_ids_list)):
+            ai, aj = actor_ids_list[i], actor_ids_list[j]
+            shared = len(actor_news_sets[ai] & actor_news_sets[aj])
+            if shared >= 2:
+                add_edge(ai, aj, "linked_to", f"{shared} shared items", min(95, 50 + shared * 15))
+
+    # ── Phase 5: AI enrichment — campaign nodes only ──────────────────────────
+    provider = "deterministic"
+
+    if len(nodes) >= 4:
+        node_id_list = json.dumps(sorted(nodes.keys())[:25])
+        news_ctx = "\n".join(
+            f"  news_{n.id}: [{n.severity}] {n.title[:65]}"
+            for n in news_rows[:12]
+        )
+        actor_ctx = "\n".join(
+            f"  {nid}: {nodes[nid]['label']} ({nodes[nid].get('country') or 'unknown'})"
+            for nid in list(actor_node_ids.values())[:10]
+            if nid in nodes
+        )
+        ai_prompt = f"""You are a threat intelligence analyst. Identify 2-3 CAMPAIGN nodes that
+group existing actor/news nodes into coordinated operations.
+
+EXISTING CONFIRMED NODE IDs — use these EXACTLY in links.node_id:
+{node_id_list}
+
+RECENT NEWS:
 {news_ctx}
 
-=== KNOWN THREAT ACTORS ===
-{actors_ctx}
+CONFIRMED ACTORS:
+{actor_ctx}
 
-=== OUTPUT RULES ===
-Return ONLY a single valid JSON object — no markdown fences, no explanation.
-IMPORTANT: Edge "source" and "target" values MUST exactly match an "id" value from your nodes array.
-Schema:
-{{
-  "nodes": [
-    {{
-      "id": "unique_snake_case_id",
-      "type": "actor|news|campaign|technique",
-      "label": "max 40 chars",
-      "description": "1-2 sentences of useful context",
-      "severity": "CRITICAL|HIGH|MEDIUM|INFO",
-      "confidence": 85,
-      "country": "origin country for actor nodes, else null",
-      "last_seen": "YYYY-MM or null",
-      "iocs": ["indicator1", "indicator2"],
-      "techniques": ["technique1", "technique2"],
-      "target_sectors": ["finance", "healthcare"],
-      "sources": ["brief source headline 1", "brief source headline 2"]
-    }}
-  ],
-  "edges": [
-    {{"id": "e1", "source": "exact_node_id", "target": "exact_node_id", "label": "max 25 chars", "type": "linked_to|uses_technique|targets|mentioned_in", "strength": 80}}
-  ]
-}}
-Produce 8-14 nodes and 10-18 edges. Make sure every actor and campaign node has at least 2 edges.
-Group related nodes: actors link to campaigns they run; campaigns link to techniques used; news items link to relevant actors/campaigns.
-For iocs use real-looking but anonymised examples (domain patterns, hash prefixes). Keep sources brief (max 60 chars each)."""
+Return ONLY valid JSON, no markdown fences:
+{{"campaigns":[{{"id":"campaign_snake_id","label":"Name max 35 chars","description":"2 sentences.","country":"string or null","confidence":75,"target_sectors":["sector"],"links":[{{"node_id":"EXACT_ID","edge_type":"linked_to","label":"short"}}]}}]}}
 
-    messages = [
-        {"role": "system", "content": "You are a cybersecurity analyst. Output ONLY valid JSON with no markdown formatting."},
-        {"role": "user",   "content": prompt},
-    ]
+Rules: id MUST start with 'campaign_'. node_id MUST be from the list above verbatim."""
 
-    from llm import call_llm
-    text, provider = await call_llm(messages, db, temperature=0.1, max_tokens=3500, timeout_s=90.0, json_mode=True, model_override=model_override)
+        messages = [
+            {"role": "system", "content": "Output ONLY valid JSON. No markdown."},
+            {"role": "user",   "content": ai_prompt},
+        ]
+        from llm import call_llm
+        try:
+            text, prov = await call_llm(
+                messages, db, temperature=0.05, max_tokens=1200,
+                timeout_s=120.0, json_mode=True, model_override=model_override,
+            )
+            provider = prov or "deterministic"
 
-    if not text:
-        raise HTTPException(503, "AI provider unavailable — check Ollama status or configure Groq/OpenRouter.")
-
-    # ── Parse LLM JSON ────────────────────────────────────────────────────────
-    clean = text.strip()
-    if clean.startswith("```"):
-        clean = "\n".join(clean.split("\n")[1:])
-        clean = clean.rsplit("```", 1)[0].strip()
-
-    graph = None
-    # Attempt 1: direct parse
-    try:
-        graph = json.loads(clean)
-    except json.JSONDecodeError:
-        pass
-
-    # Attempt 2: extract outermost {} block
-    if graph is None:
-        match = _re.search(r'\{[\s\S]+\}', clean[:32_000])
-        if match:
-            try:
-                graph = json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-
-    # Attempt 3: repair truncated JSON by closing unclosed brackets
-    if graph is None:
-        candidate = match.group() if match else clean
-        # Find last complete object before a truncated entry
-        # Try truncating at the last valid comma-separated item in arrays
-        for trim_pat in [r',\s*\{[^}]*$', r',\s*"[^"]*$', r',?\s*\{?\s*$']:
-            trimmed = _re.sub(trim_pat, '', candidate)
-            # Re-balance brackets
-            open_b = trimmed.count('{') - trimmed.count('}')
-            open_s = trimmed.count('[') - trimmed.count(']')
-            if open_b >= 0 and open_s >= 0:
-                repaired = trimmed + (']' * open_s) + ('}' * open_b)
+            if text:
+                clean = text.strip()
+                if clean.startswith("```"):
+                    clean = "\n".join(clean.split("\n")[1:]).rsplit("```", 1)[0].strip()
+                ai_data: dict | None = None
                 try:
-                    graph = json.loads(repaired)
-                    break
-                except json.JSONDecodeError:
-                    pass
+                    ai_data = json.loads(clean)
+                except Exception:
+                    m = _re.search(r"\{[\s\S]+\}", clean[:12_000])
+                    if m:
+                        try:
+                            ai_data = json.loads(m.group())
+                        except Exception:
+                            pass
 
-    if graph is None:
-        raise HTTPException(422, "LLM returned unparseable JSON — retry in a moment.")
+                if ai_data and isinstance(ai_data.get("campaigns"), list):
+                    for camp in ai_data["campaigns"][:3]:
+                        cid = safe_id(str(camp.get("id", "")))
+                        if not cid or not camp.get("label"):
+                            continue
+                        if not cid.startswith("campaign_"):
+                            cid = f"campaign_{cid}"
+                        if cid in nodes:
+                            continue
+                        upsert_node({
+                            "id":             cid,
+                            "type":           "campaign",
+                            "label":          str(camp.get("label", ""))[:40],
+                            "description":    str(camp.get("description", ""))[:300],
+                            "severity":       "HIGH",
+                            "verified":       False,
+                            "ai_generated":   True,
+                            "confidence":     int(camp["confidence"]) if isinstance(camp.get("confidence"), (int, float)) else 70,
+                            "country":        str(camp["country"])[:40] if camp.get("country") else None,
+                            "last_seen":      None,
+                            "iocs":           [],
+                            "techniques":     [],
+                            "target_sectors": _str_list(camp.get("target_sectors", []), maxlen=4, itemlen=30),
+                            "sources":        [],
+                        })
+                        for link in (camp.get("links") or [])[:8]:
+                            ln_id = str(link.get("node_id", "")).strip()
+                            if ln_id in nodes:
+                                etype = str(link.get("edge_type", "linked_to"))
+                                if etype not in ("linked_to", "uses_technique", "targets", "mentioned_in"):
+                                    etype = "linked_to"
+                                add_edge(cid, ln_id, etype, str(link.get("label", ""))[:25], 75, False, True)
+        except Exception as exc:
+            logger.warning("AI campaign enrichment failed: %s", exc)
 
-    # ── Validate nodes ────────────────────────────────────────────────────────
-    nodes = []
-    for n in graph.get("nodes", []):
-        if not n.get("id") or not n.get("label"):
-            continue
-        ntype = n.get("type", "news")
-        if ntype not in ("actor", "news", "campaign", "technique"):
-            ntype = "news"
-        # Sanitise list fields
-        def _str_list(v, maxlen=6, itemlen=80) -> list:
-            if not isinstance(v, list): return []
-            return [str(x)[:itemlen] for x in v[:maxlen] if x]
+    # ── Phase 6: Prune nodes that have no edges ───────────────────────────────
+    connected: set[str] = set()
+    for e in edge_list:
+        connected.add(e["source"])
+        connected.add(e["target"])
 
-        nodes.append({
-            "id":             str(n["id"])[:64],
-            "type":           ntype,
-            "label":          str(n.get("label", ""))[:40],
-            "description":    str(n.get("description", ""))[:400],
-            "severity":       n.get("severity") if n.get("severity") in ("CRITICAL", "HIGH", "MEDIUM", "INFO") else None,
-            "verified":       False,
-            "ai_generated":   True,
-            # ── new enrichment fields ──────────────────────────────────────
-            "confidence":     int(n["confidence"]) if isinstance(n.get("confidence"), (int, float)) else None,
-            "country":        str(n["country"])[:40] if n.get("country") else None,
-            "last_seen":      str(n["last_seen"])[:10] if n.get("last_seen") else None,
-            "iocs":           _str_list(n.get("iocs")),
-            "techniques":     _str_list(n.get("techniques")),
-            "target_sectors": _str_list(n.get("target_sectors")),
-            "sources":        _str_list(n.get("sources"), maxlen=4, itemlen=100),
-        })
-
-    # ── Validate edges (case-insensitive ID matching) ─────────────────────────
-    # Build a lowercase → canonical-id lookup so IDs like "APT29" match "apt29"
-    node_id_map: dict[str, str] = {n["id"].lower(): n["id"] for n in nodes}
-
-    edges = []
-    seen_edge_pairs: set[tuple[str, str]] = set()
-    for e in graph.get("edges", []):
-        src_lower = str(e.get("source", "")).lower()
-        tgt_lower = str(e.get("target", "")).lower()
-        src_id = node_id_map.get(src_lower)
-        tgt_id = node_id_map.get(tgt_lower)
-        if not src_id or not tgt_id or src_id == tgt_id:
-            continue
-        pair = (src_id, tgt_id)
-        if pair in seen_edge_pairs:
-            continue
-        seen_edge_pairs.add(pair)
-        etype = e.get("type", "linked_to")
-        if etype not in ("linked_to", "uses_technique", "targets", "mentioned_in"):
-            etype = "linked_to"
-        edges.append({
-            "id":           str(e.get("id", f"e_{len(edges)}"))[:64],
-            "source":       src_id,
-            "target":       tgt_id,
-            "label":        str(e.get("label", ""))[:25],
-            "type":         etype,
-            "strength":     int(e["strength"]) if isinstance(e.get("strength"), (int, float)) else 60,
-            "verified":     False,
-            "ai_generated": True,
-        })
+    # Always keep actor nodes even if isolated (real DB data)
+    final_nodes = [
+        n for n in nodes.values()
+        if n["id"] in connected or n["type"] == "actor"
+    ]
+    final_ids = {n["id"] for n in final_nodes}
+    final_edges = [e for e in edge_list if e["source"] in final_ids and e["target"] in final_ids]
 
     return {
-        "nodes":        nodes,
-        "edges":        edges,
-        "provider":     provider or "unknown",
+        "nodes":        final_nodes,
+        "edges":        final_edges,
+        "provider":     provider,
         "hours_back":   hours_back,
         "generated_at": datetime.utcnow().isoformat(),
         "ai_generated": True,
