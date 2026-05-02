@@ -152,9 +152,9 @@ interface DeltaData {
   critical_news:  { current: number; baseline: number; pct_change: number | null }
   cves:           { current: number; baseline: number; pct_change: number | null }
   kev:            { current: number; baseline: number; pct_change: number | null }
-  new_actors:          string[]
-  disappeared_actors:  string[]
-  new_malware_families: string[]
+  new_actors:           string[]
+  disappeared_actors:   string[]
+  new_malware_families?: string[]
 }
 
 function TrendBadge({ pct }: { pct: number | null }) {
@@ -258,20 +258,20 @@ function DeltaPanel() {
           )}
 
           {/* New malware families */}
-          {delta.new_malware_families.length > 0 && (
+          {(delta.new_malware_families ?? []).length > 0 && (
             <div>
               <p className="font-mono text-[0.46rem] text-[var(--color-warning)] tracking-widest mb-1.5">
-                NEW MALWARE FAMILIES ({delta.new_malware_families.length})
+                NEW MALWARE FAMILIES ({delta.new_malware_families!.length})
               </p>
               <div className="flex flex-wrap gap-1">
-                {delta.new_malware_families.map(f => (
+                {delta.new_malware_families!.map(f => (
                   <span key={f} className="tag-chip text-[0.44rem]">{f}</span>
                 ))}
               </div>
             </div>
           )}
 
-          {delta.new_actors.length === 0 && delta.new_malware_families.length === 0 && (
+          {delta.new_actors.length === 0 && (delta.new_malware_families ?? []).length === 0 && (
             <div className="text-center py-4">
               <p className="font-mono text-[0.55rem] text-[var(--text-ghost)] tracking-widest">
                 NO SIGNIFICANT CHANGES

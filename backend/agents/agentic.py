@@ -11,35 +11,124 @@ from typing import AsyncGenerator
 from sqlalchemy import select, func, desc, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import NewsItem, CVEItem, ThreatActor, IOCItem, AiBriefing
+from database import NewsItem, CVEItem, ThreatActor, AiBriefing
 
 logger = logging.getLogger("sigintx.agentic")
 
 MAX_TOOL_ROUNDS = 5
 
 _ANALYST_SYSTEM = """\
-You are SIGINTX, an expert autonomous cybersecurity analyst with access to a live threat intelligence database.
+You are SIGINTX, an expert autonomous cybersecurity analyst with access to a live threat intelligence platform.
 
-To investigate threats, use tools by outputting a tool call on its own line with this exact format:
-<tool_call>{{"name": "TOOL_NAME", "args": {{JSON_ARGS}}}}</tool_call>
-
-AVAILABLE TOOLS:
-- search_news    args: query(str), severity(str opt: CRITICAL/HIGH/MEDIUM/INFO), hours_back(int def 24), limit(int def 5)
-- search_cves    args: query(str opt), severity(str opt), min_cvss(float opt), kev_only(bool opt), limit(int def 5)
-- search_actors  args: query(str), limit(int def 5)
-- search_iocs    args: ioc_type(str opt: hash_sha256/url/ip/domain), malware_family(str opt), limit(int def 10)
-- get_stats      args: {{}} — overall database statistics
-- get_campaigns  args: days_back(int def 7) — campaign timeline by actor
-
-RULES:
-- Use tools to find concrete evidence before answering
-- Only reference CVE IDs, actor names, and IOCs that appear in tool results
-- Be specific: include CVE IDs, actor names, detection rules, patch guidance
-- After tool results, either call more tools or give your final answer (no more tool calls)
-- Current UTC time: {utc_now}
+- Respond naturally to greetings and general questions — do NOT call tools for those.
+- For threat queries (news, CVEs, actors, campaigns, stats), use the provided tools to retrieve live data.
+- Never fabricate CVE IDs, actor names, or threat data. Only cite what appears in tool results.
+- After tool results, give a concise, specific, actionable final answer.
+Current UTC time: {utc_now}
 """
 
+# OpenAI-compatible tool schemas — used for native function calling on all providers
+TOOL_SCHEMAS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_news",
+            "description": "Search recent threat intelligence news items in the live database",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query":      {"type": "string",  "description": "Keyword or phrase to search"},
+                    "severity":   {"type": "string",  "enum": ["CRITICAL", "HIGH", "MEDIUM", "INFO"]},
+                    "hours_back": {"type": "integer", "description": "How many hours back to search (default 24)"},
+                    "limit":      {"type": "integer", "description": "Max results (default 5, max 15)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_cves",
+            "description": "Search CVEs by keyword, severity, CVSS score, or KEV status",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query":     {"type": "string",  "description": "CVE ID or description keyword"},
+                    "severity":  {"type": "string",  "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+                    "min_cvss":  {"type": "number",  "description": "Minimum CVSS score (0–10)"},
+                    "kev_only":  {"type": "boolean", "description": "Only CISA KEV entries"},
+                    "limit":     {"type": "integer", "description": "Max results (default 5)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_actors",
+            "description": "Search threat actor profiles (name, aliases, country, TTPs)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",  "description": "Actor name or alias"},
+                    "limit": {"type": "integer", "description": "Max results (default 5)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stats",
+            "description": "Return overall database statistics: news counts, CVE counts, threat actor count",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_campaigns",
+            "description": "Return active threat campaign timeline grouped by actor",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days_back": {"type": "integer", "description": "How many days back (default 7)"},
+                },
+            },
+        },
+    },
+]
+
+# Text-based fallback parsers for models that ignore function-calling schema
 _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+_ALT_TOOL_CALL_RE = re.compile(
+    r"<(search_news|search_actors|search_cves|get_stats|get_campaigns)\s+(\{[^>]*\})\s*>",
+    re.DOTALL,
+)
+
+
+def _extract_tool_calls_from_text(content: str) -> list[dict]:
+    """Parse tool calls from model text when native function calling wasn't used."""
+    calls = []
+    for raw in _TOOL_CALL_RE.findall(content):
+        try:
+            calls.append(json.loads(raw.strip()))
+        except json.JSONDecodeError:
+            pass
+    if not calls:
+        for m in _ALT_TOOL_CALL_RE.finditer(content):
+            try:
+                calls.append({"name": m.group(1), "args": json.loads(m.group(2))})
+            except json.JSONDecodeError:
+                pass
+    return calls
+
+
+def _strip_tool_syntax(text: str) -> str:
+    text = _TOOL_CALL_RE.sub("", text)
+    text = _ALT_TOOL_CALL_RE.sub("", text)
+    return text.strip()
 
 
 # ── Tool implementations ──────────────────────────────────────────────────────
@@ -122,20 +211,6 @@ async def _tool_search_actors(db, query="", limit=5):
     return f"Found {len(rows)} threat actors:\n\n" + "\n\n".join(parts)
 
 
-async def _tool_search_iocs(db, ioc_type=None, malware_family=None, limit=10):
-    q = select(IOCItem).order_by(desc(IOCItem.first_seen))
-    if ioc_type:       q = q.where(IOCItem.ioc_type == ioc_type)
-    if malware_family: q = q.where(IOCItem.malware_family.ilike(f"%{malware_family}%"))
-    rows = (await db.scalars(q.limit(min(int(limit), 50)))).all()
-    if not rows:
-        return "No IOCs found matching criteria."
-    parts = [
-        f"[{ioc.ioc_type}] {ioc.value[:80]}  |  {ioc.malware_family or 'unknown'}  |  {ioc.source}"
-        for ioc in rows
-    ]
-    return f"Found {len(rows)} IOCs:\n" + "\n".join(parts)
-
-
 async def _tool_get_stats(db):
     now        = datetime.utcnow()
     cutoff_24h = now - timedelta(hours=24)
@@ -144,13 +219,11 @@ async def _tool_get_stats(db):
     critical_news = await db.scalar(select(func.count(NewsItem.id)).where(NewsItem.severity == "CRITICAL")) or 0
     total_cves    = await db.scalar(select(func.count(CVEItem.id))) or 0
     kev_count     = await db.scalar(select(func.count(CVEItem.id)).where(CVEItem.in_kev.is_(True))) or 0
-    total_iocs    = await db.scalar(select(func.count(IOCItem.id))) or 0
     total_actors  = await db.scalar(select(func.count(ThreatActor.id))) or 0
     return (
         f"Database Statistics:\n"
         f"  News: {total_news} total | {news_24h} last 24h | {critical_news} critical\n"
         f"  CVEs: {total_cves} total | {kev_count} in CISA KEV\n"
-        f"  IOCs: {total_iocs} total\n"
         f"  Threat Actors: {total_actors}\n"
     )
 
@@ -178,8 +251,6 @@ async def _call_tool(db: AsyncSession, name: str, args: dict) -> str:
             return await _tool_search_cves(db, **{k: v for k, v in args.items() if k in ("query", "severity", "min_cvss", "kev_only", "limit")})
         if name == "search_actors":
             return await _tool_search_actors(db, **{k: v for k, v in safe.items() if k in ("query", "limit")})
-        if name == "search_iocs":
-            return await _tool_search_iocs(db, **{k: v for k, v in safe.items() if k in ("ioc_type", "malware_family", "limit")})
         if name == "get_stats":
             return await _tool_get_stats(db)
         if name == "get_campaigns":
@@ -196,10 +267,9 @@ async def agentic_stream(
     message: str,
     db: AsyncSession,
     model: str | None = None,
-    # Legacy params kept for call-site compatibility — ignored
-    ollama_host: str | None = None,
+    ollama_host: str | None = None,  # legacy, ignored
 ) -> AsyncGenerator[str, None]:
-    from llm import call_llm
+    from llm import call_llm_with_tools, call_llm
 
     utc_now    = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     system_msg = _ANALYST_SYSTEM.format(utc_now=utc_now)
@@ -209,48 +279,79 @@ async def agentic_stream(
     ]
 
     for _round in range(MAX_TOOL_ROUNDS):
-        content, _ = await call_llm(
-            messages, db, model_override=model, max_tokens=2000, timeout_s=90.0
+        # ── Attempt native function calling ──────────────────────────────────
+        content, structured_calls, raw_api_tc, provider = await call_llm_with_tools(
+            messages, db, tools=TOOL_SCHEMAS, model_override=model, timeout_s=90.0
         )
-        if content is None:
-            yield f"data: {json.dumps({'type': 'error', 'text': 'No AI provider available. Configure Ollama or a cloud provider in Settings.'})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            return
-        assistant_content = content
 
-        raw_calls = _TOOL_CALL_RE.findall(assistant_content)
+        if not provider:
+            # All providers failed — try plain call as last resort
+            content, provider = await call_llm(messages, db, model_override=model,
+                                               max_tokens=2000, timeout_s=90.0)
+            if not provider:
+                yield f"data: {json.dumps({'type': 'error', 'text': 'No AI provider available.'})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
+            structured_calls = []
+            raw_api_tc       = []
 
-        if not raw_calls:
-            messages.append({"role": "assistant", "content": assistant_content})
-            words = assistant_content.split(" ")
-            for i, word in enumerate(words):
-                chunk_text = word + (" " if i < len(words) - 1 else "")
-                yield f"data: {json.dumps({'type': 'text', 'text': chunk_text})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            return
+        # ── If native tool calls returned, use them ───────────────────────────
+        if structured_calls:
+            # Add assistant turn with the raw tool_calls blob for correct history
+            messages.append({
+                "role":       "assistant",
+                "content":    content or "",
+                "tool_calls": raw_api_tc,
+            })
 
-        messages.append({"role": "assistant", "content": assistant_content})
-        tool_result_parts: list[str] = []
-
-        for raw in raw_calls:
-            try:
-                call_data = json.loads(raw.strip())
+            for tc, call_data in zip(raw_api_tc, structured_calls):
                 tool_name = str(call_data.get("name", ""))
                 tool_args = call_data.get("args", {})
                 if not isinstance(tool_args, dict):
                     tool_args = {}
-            except (json.JSONDecodeError, KeyError):
-                continue
 
-            yield f"data: {json.dumps({'type': 'tool_call', 'name': tool_name, 'args': tool_args})}\n\n"
-            result = await _call_tool(db, tool_name, tool_args)
-            yield f"data: {json.dumps({'type': 'tool_result', 'name': tool_name, 'text': result[:600]})}\n\n"
-            tool_result_parts.append(f'<tool_result name="{tool_name}">\n{result}\n</tool_result>')
+                yield f"data: {json.dumps({'type': 'tool_call', 'name': tool_name, 'args': tool_args})}\n\n"
+                result = await _call_tool(db, tool_name, tool_args)
+                yield f"data: {json.dumps({'type': 'tool_result', 'name': tool_name, 'text': result[:600]})}\n\n"
 
-        if tool_result_parts:
+                # Standard tool-result message expected by function-calling models
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.get("id", f"call_{tool_name}"),
+                    "content":      result,
+                })
+            continue  # loop back — model will synthesise final answer
+
+        # ── Fallback: parse tool calls from text ─────────────────────────────
+        text_calls = _extract_tool_calls_from_text(content or "")
+        if text_calls:
+            messages.append({"role": "assistant", "content": content})
+            tool_result_parts: list[str] = []
+
+            for call_data in text_calls:
+                tool_name = str(call_data.get("name", ""))
+                tool_args = call_data.get("args", {})
+                if not isinstance(tool_args, dict):
+                    tool_args = {}
+
+                yield f"data: {json.dumps({'type': 'tool_call', 'name': tool_name, 'args': tool_args})}\n\n"
+                result = await _call_tool(db, tool_name, tool_args)
+                yield f"data: {json.dumps({'type': 'tool_result', 'name': tool_name, 'text': result[:600]})}\n\n"
+                tool_result_parts.append(f'<tool_result name="{tool_name}">\n{result}\n</tool_result>')
+
             messages.append({"role": "user", "content": "\n\n".join(tool_result_parts)})
+            continue  # loop back
 
-    yield f"data: {json.dumps({'type': 'text', 'text': '⚠️ Reached maximum tool rounds. Answer may be incomplete.'})}\n\n"
+        # ── No tool calls — stream final answer ───────────────────────────────
+        messages.append({"role": "assistant", "content": content or ""})
+        final_text = _strip_tool_syntax(content or "")
+        words = final_text.split(" ")
+        for i, word in enumerate(words):
+            yield f"data: {json.dumps({'type': 'text', 'text': word + (' ' if i < len(words) - 1 else '')})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        return
+
+    yield f"data: {json.dumps({'type': 'text', 'text': '⚠️ Reached maximum tool rounds.'})}\n\n"
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
 
@@ -296,13 +397,24 @@ async def compute_delta(db: AsyncSession, hours_back: int = 24) -> dict:
         .where(NewsItem.published_at >= base_start, NewsItem.published_at < base_end, NewsItem.threat_actors.isnot(None))
     )).all())
 
-    curr_mw = set((await db.scalars(
+    def _malware_set(rows) -> set[str]:
+        out: set[str] = set()
+        for row in rows:
+            try:
+                tags = json.loads(row) if isinstance(row, str) else (row or [])
+                out.update(t for t in tags if isinstance(t, str))
+            except Exception:
+                pass
+        return out
+
+    from database import IOCItem
+    curr_malware = _malware_set((await db.scalars(
         select(IOCItem.malware_family)
-        .where(IOCItem.first_seen >= curr_start, IOCItem.malware_family.isnot(None))
+        .where(IOCItem.fetched_at >= curr_start, IOCItem.malware_family.isnot(None))
     )).all())
-    base_mw = set((await db.scalars(
+    base_malware = _malware_set((await db.scalars(
         select(IOCItem.malware_family)
-        .where(IOCItem.first_seen >= base_start, IOCItem.first_seen < base_end, IOCItem.malware_family.isnot(None))
+        .where(IOCItem.fetched_at >= base_start, IOCItem.fetched_at < base_end, IOCItem.malware_family.isnot(None))
     )).all())
 
     return {
@@ -312,7 +424,7 @@ async def compute_delta(db: AsyncSession, hours_back: int = 24) -> dict:
         "critical_news": {"current": curr_critical, "baseline": base_critical, "pct_change": _pct(curr_critical, base_critical)},
         "cves":          {"current": curr_cves,     "baseline": base_cves,     "pct_change": _pct(curr_cves,     base_cves)},
         "kev":           {"current": curr_kev,      "baseline": base_kev,      "pct_change": _pct(curr_kev,      base_kev)},
-        "new_actors":           sorted(curr_actors - base_actors)[:20],
-        "disappeared_actors":   sorted(base_actors - curr_actors)[:10],
-        "new_malware_families": sorted(curr_mw - base_mw)[:20],
+        "new_actors":             sorted(curr_actors  - base_actors)[:20],
+        "disappeared_actors":     sorted(base_actors  - curr_actors)[:10],
+        "new_malware_families":   sorted(curr_malware - base_malware)[:15],
     }
